@@ -3,6 +3,7 @@ package com.example.steptwin.ui.map
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.steptwin.data.favorites.FavoritesStore
+import com.example.steptwin.domain.assistant.ChatTurn
 import com.example.steptwin.domain.favorites.FavoriteRoute
 import com.example.steptwin.domain.nav.NavMode
 import com.example.steptwin.domain.nav.NavPath
@@ -13,6 +14,7 @@ import com.example.steptwin.domain.preview.RoutePreview
 import com.example.steptwin.domain.preview.RoutePreviewResult
 import com.example.steptwin.domain.repository.RoutePreviewRepository
 import com.example.steptwin.domain.repository.TugRepository
+import com.example.steptwin.domain.repository.VoiceAssistantRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -35,6 +37,7 @@ class MapRouteViewModel @Inject constructor(
     private val previewRepository: RoutePreviewRepository,
     private val tugRepository: TugRepository,
     private val favoritesStore: FavoritesStore,
+    private val assistantRepository: VoiceAssistantRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(MapRouteUiState())
@@ -318,8 +321,110 @@ class MapRouteViewModel @Inject constructor(
         _uiState.update { it.copy(userLocation = path.pointAt(distance), navInstruction = banner) }
     }
 
+    // ---- 말벗(음성 양방향 대화) ----
+    private val chatHistory = mutableListOf<ChatTurn>()
+
+    fun toggleAssistant() {
+        if (_uiState.value.assistantActive) {
+            _uiState.update {
+                it.copy(assistantActive = false, assistantListening = false, assistantThinking = false)
+            }
+            return
+        }
+        chatHistory.clear()
+        val dest = lastDestination?.name ?: "목적지"
+        val greeting = "안녕하세요. ${dest}까지 제가 말벗이 되어 안내해 드릴게요. 궁금하면 언제든 물어보세요."
+        _uiState.update {
+            it.copy(
+                assistantActive = true,
+                assistantThinking = false,
+                assistantHasKey = assistantRepository.hasApiKey,
+                assistantCaption = greeting,
+            )
+        }
+        _ttsEvents.tryEmit(greeting)
+    }
+
+    fun setAssistantListening(listening: Boolean) =
+        _uiState.update { it.copy(assistantListening = listening) }
+
+    /** 마이크로 받은 사용자 발화 처리(안전어 → SOS, 그 외 → Claude/폴백). */
+    fun onUserUtterance(text: String) {
+        val t = text.trim()
+        if (t.isEmpty()) return
+        if (SosWords.any { t.contains(it) }) { triggerSos(); return }
+
+        if (!assistantRepository.hasApiKey) {
+            respond(keywordAnswer(t))
+            return
+        }
+        chatHistory.add(ChatTurn("user", t))
+        _uiState.update { it.copy(assistantCaption = "“$t”", assistantThinking = true) }
+        viewModelScope.launch {
+            val reply = runCatching {
+                assistantRepository.reply(buildSystemPrompt(), chatHistory)
+            }.getOrElse { keywordAnswer(t) }
+            chatHistory.add(ChatTurn("assistant", reply))
+            _uiState.update { it.copy(assistantThinking = false, assistantCaption = reply) }
+            _ttsEvents.tryEmit(reply)
+        }
+    }
+
+    /** 빠른 질문 버튼(경로 맥락에서 즉답, API 미사용). */
+    fun quickAsk(kind: String) {
+        val answer = when (kind) {
+            "where" -> "지금 '${currentInstr()}' 안내를 따라 가고 계세요."
+            "left" -> "목적지까지 약 ${remainingMeters()}미터 남았어요."
+            "confirm" -> "네, 잘 가고 계세요. 걱정 마세요."
+            "repeat" -> currentInstr()
+            else -> "네, 말씀하세요."
+        }
+        respond(answer)
+    }
+
+    private fun respond(text: String) {
+        _uiState.update { it.copy(assistantThinking = false, assistantCaption = text) }
+        _ttsEvents.tryEmit(text)
+    }
+
+    private fun triggerSos() {
+        val msg = "긴급 도움 요청을 보냈어요. 보호자에게 곧 연락이 갈 거예요. 그 자리에 잠시 계세요."
+        _uiState.update { it.copy(assistantThinking = false, assistantCaption = "🚨 $msg") }
+        _ttsEvents.tryEmit(msg)
+    }
+
+    private fun keywordAnswer(text: String): String = when {
+        text.contains("어디") -> "지금 '${currentInstr()}' 안내를 따라 가고 계세요."
+        text.contains("남았") || text.contains("얼마") -> "목적지까지 약 ${remainingMeters()}미터 남았어요."
+        text.contains("잘") || text.contains("맞") -> "네, 잘 가고 계세요. 걱정 마세요."
+        text.contains("다시") -> currentInstr()
+        text.contains("그만") || text.contains("종료") -> "네, 필요하면 다시 불러주세요."
+        else -> "잘 못 들었어요. 아래 버튼으로 물어봐 주세요."
+    }
+
+    private fun currentInstr(): String =
+        _uiState.value.navInstruction.ifBlank { "경로를 따라 이동" }
+
+    private fun remainingMeters(): Int {
+        val path = navPath ?: return 0
+        return (path.totalDistance * (1f - _uiState.value.navProgress)).toInt().coerceAtLeast(0)
+    }
+
+    private fun buildSystemPrompt(): String {
+        val dest = lastDestination?.name ?: "목적지"
+        val transit = _uiState.value.preview?.segments
+            ?.mapNotNull { it.transit?.lineLabel }?.distinct()?.joinToString(", ").orEmpty()
+        return "당신은 어르신과 대화하며 ${dest}까지 도보 길안내를 돕는 다정한 AI 말벗입니다. " +
+            "존댓말로, 한 번에 한두 문장만, 짧고 쉽게 말하세요. " +
+            "현재 안내: '${currentInstr()}'. 목적지까지 약 ${remainingMeters()}미터 남음. " +
+            (if (transit.isNotBlank()) "이용 대중교통: $transit. " else "") +
+            "지도에 없는 실제 지형(가게 이름, 신호등 개수 등)은 지어내지 말고, 모르면 다정하게 모른다고 하세요. " +
+            "다치거나 위험하다고 하면 침착히 안심시키고 보호자에게 연락하겠다고 하세요."
+    }
+
     private companion object {
         const val SuggestDebounceMillis = 250L
+        val SosWords = listOf("도와", "살려", "아파", "넘어", "다쳐", "다쳤", "응급")
     }
 }
 
@@ -343,6 +448,11 @@ data class MapRouteUiState(
     val navProgress: Float = 0f,
     val navInstruction: String = "",
     val userLocation: GeoPoint? = null,
+    val assistantActive: Boolean = false,
+    val assistantListening: Boolean = false,
+    val assistantThinking: Boolean = false,
+    val assistantHasKey: Boolean = false,
+    val assistantCaption: String = "",
 ) {
     val canNavigate: Boolean = navState == NavigationState.RoutePreviewShown &&
         (preview?.segments?.isNotEmpty() == true)

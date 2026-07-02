@@ -29,6 +29,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
@@ -58,6 +59,7 @@ import com.example.steptwin.domain.preview.PreviewMarker
 import com.example.steptwin.domain.preview.PreviewSegment
 import com.example.steptwin.domain.preview.RoutePreview
 import com.example.steptwin.domain.preview.SegmentKind
+import com.example.steptwin.ui.assistant.rememberSpeechController
 import com.example.steptwin.ui.common.rememberKoreanTts
 import com.kakao.vectormap.KakaoMap
 import com.kakao.vectormap.KakaoMapReadyCallback
@@ -178,6 +180,28 @@ fun MapRouteScreen(
         onLocation = viewModel::onRealLocation,
     )
 
+    // 말벗(음성 대화): STT + 마이크 권한.
+    val speechController = rememberSpeechController(
+        onResult = viewModel::onUserUtterance,
+        onListeningChange = viewModel::setAssistantListening,
+    )
+    val micGranted = remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED,
+        )
+    }
+    val micLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { ok ->
+        micGranted.value = ok
+        if (ok) speechController.startListening()
+    }
+    val onMic: () -> Unit = {
+        if (micGranted.value) speechController.startListening()
+        else micLauncher.launch(Manifest.permission.RECORD_AUDIO)
+    }
+
     Box(modifier = modifier.fillMaxSize()) {
         AndroidView(factory = { mapView }, modifier = Modifier.fillMaxSize())
 
@@ -223,13 +247,24 @@ fun MapRouteScreen(
                 onSaveFavorite = viewModel::saveFavorite,
                 modifier = bottomModifier,
             )
-            NavigationState.NavigatingPlaceholder -> NavigatingBar(
-                uiState = uiState,
-                onToggleMode = viewModel::setNavMode,
-                onProgress = viewModel::updateSimulatedProgress,
-                onStop = viewModel::stopNavigation,
+            NavigationState.NavigatingPlaceholder -> Column(
                 modifier = bottomModifier,
-            )
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                AssistantPanel(
+                    uiState = uiState,
+                    onToggle = viewModel::toggleAssistant,
+                    onMic = onMic,
+                    onQuickAsk = viewModel::quickAsk,
+                )
+                NavigatingBar(
+                    uiState = uiState,
+                    onToggleMode = viewModel::setNavMode,
+                    onProgress = viewModel::updateSimulatedProgress,
+                    onStop = viewModel::stopNavigation,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
             NavigationState.Idle -> Unit
         }
     }
@@ -437,6 +472,94 @@ private fun RoutePreviewBar(
                     Text(text = if (uiState.favoriteSaved) "★ 저장됨" else "☆ 즐겨찾기")
                 }
                 TextButton(onClick = onEditRoute) { Text(text = "경로 수정") }
+            }
+        }
+    }
+}
+
+/** 말벗(음성 양방향 대화) 패널 — 길안내와 동시에 챗봇처럼 묻고 답한다. */
+@Composable
+private fun AssistantPanel(
+    uiState: MapRouteUiState,
+    onToggle: () -> Unit,
+    onMic: () -> Unit,
+    onQuickAsk: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Card(modifier = modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(text = "🗣 말벗 대화", style = MaterialTheme.typography.titleMedium)
+                TextButton(onClick = onToggle) {
+                    Text(text = if (uiState.assistantActive) "끄기" else "켜기")
+                }
+            }
+
+            if (!uiState.assistantActive) {
+                Text(
+                    text = "전화하듯 목소리로 물어보며 길을 안내받을 수 있어요.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                return@Column
+            }
+
+            val status = when {
+                uiState.assistantListening -> "듣고 있어요..."
+                uiState.assistantThinking -> "생각 중..."
+                else -> null
+            }
+            if (status != null) {
+                Text(
+                    text = status,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+            Text(
+                text = uiState.assistantCaption.ifBlank { "궁금한 걸 말하거나 아래 버튼을 눌러보세요." },
+                style = MaterialTheme.typography.bodyLarge,
+            )
+
+            Button(
+                onClick = onMic,
+                enabled = !uiState.assistantListening,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(text = if (uiState.assistantListening) "🎤 듣는 중..." else "🎤 말하기")
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { onQuickAsk("where") }, modifier = Modifier.weight(1f)) {
+                    Text(text = "어디에요?")
+                }
+                OutlinedButton(onClick = { onQuickAsk("left") }, modifier = Modifier.weight(1f)) {
+                    Text(text = "얼마 남았죠?")
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { onQuickAsk("confirm") }, modifier = Modifier.weight(1f)) {
+                    Text(text = "잘 가나요?")
+                }
+                OutlinedButton(onClick = { onQuickAsk("repeat") }, modifier = Modifier.weight(1f)) {
+                    Text(text = "다시요")
+                }
+            }
+
+            if (!uiState.assistantHasKey) {
+                Text(
+                    text = "※ 자유 대화 키가 없어 정해진 질문만 알아들어요.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }

@@ -6,6 +6,8 @@
     <!-- 실시간 위치(GPS): 길안내 중 기기 내부에서만 사용, 서버로 전송하지 않음 -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- 말벗(음성 대화) STT용 마이크 -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <application
         android:name=".StepTwinApplication"
