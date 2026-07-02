@@ -41,6 +41,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import com.example.steptwin.R
+import com.example.steptwin.domain.agent.AgentReport
 import com.example.steptwin.domain.preview.GeoPoint
 import com.example.steptwin.domain.preview.PlaceSuggestion
 import com.example.steptwin.domain.preview.WalkRoute
@@ -134,6 +135,7 @@ fun MapRouteScreen(
             onSelectStart = viewModel::selectStart,
             onSelectEnd = viewModel::selectEnd,
             onSearch = viewModel::search,
+            onRunAgent = viewModel::runAgent,
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
@@ -181,6 +183,7 @@ private fun SearchPanel(
     onSelectStart: (PlaceSuggestion) -> Unit,
     onSelectEnd: (PlaceSuggestion) -> Unit,
     onSearch: () -> Unit,
+    onRunAgent: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Card(modifier = modifier) {
@@ -223,10 +226,18 @@ private fun SearchPanel(
                 Button(onClick = onSearch, enabled = !uiState.isLoading) {
                     Text(text = "길찾기")
                 }
-                if (uiState.isLoading) {
+                Button(
+                    onClick = onRunAgent,
+                    enabled = !uiState.isLoading && !uiState.isAgentRunning,
+                ) {
+                    Text(text = "🤖 AI 에이전트")
+                }
+                if (uiState.isLoading || uiState.isAgentRunning) {
                     CircularProgressIndicator(modifier = Modifier.padding(4.dp))
                 }
             }
+
+            uiState.agentReport?.let { AgentReportCard(it) }
 
             val route = uiState.route
             if (route?.metrics != null) {
@@ -282,6 +293,34 @@ private fun SuggestionList(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun AgentReportCard(report: AgentReport) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.secondaryContainer)
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(
+            text = "🤖 AI 에이전트 워크플로우 · ${if (report.llmBacked) "LLM" else "규칙기반"}",
+            style = MaterialTheme.typography.labelLarge,
+        )
+        report.steps.forEachIndexed { index, step ->
+            Text(
+                text = "${index + 1}. ${step.tool} → ${step.observation}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+            )
+        }
+        Text(
+            text = report.advice,
+            style = MaterialTheme.typography.bodyMedium,
+        )
     }
 }
 

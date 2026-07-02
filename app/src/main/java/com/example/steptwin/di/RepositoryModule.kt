@@ -1,7 +1,9 @@
 package com.example.steptwin.di
 
+import com.example.steptwin.data.remote.ClaudeAdvisor
 import com.example.steptwin.data.repository.RoutePreviewRepositoryImpl
 import com.example.steptwin.data.repository.TugRepositoryImpl
+import com.example.steptwin.domain.agent.RouteAdvisor
 import com.example.steptwin.domain.repository.RoutePreviewRepository
 import com.example.steptwin.domain.repository.TugRepository
 import dagger.Binds
@@ -22,4 +24,8 @@ abstract class RepositoryModule {
     abstract fun bindRoutePreviewRepository(
         impl: RoutePreviewRepositoryImpl,
     ): RoutePreviewRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindRouteAdvisor(impl: ClaudeAdvisor): RouteAdvisor
 }

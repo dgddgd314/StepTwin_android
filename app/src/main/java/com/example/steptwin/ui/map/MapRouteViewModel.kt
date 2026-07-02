@@ -2,6 +2,8 @@ package com.example.steptwin.ui.map
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.steptwin.domain.agent.AgentReport
+import com.example.steptwin.domain.agent.RoutePlanningAgent
 import com.example.steptwin.domain.preview.GeoPoint
 import com.example.steptwin.domain.preview.NamedPlace
 import com.example.steptwin.domain.preview.PlaceSuggestion
@@ -23,6 +25,7 @@ import javax.inject.Inject
 class MapRouteViewModel @Inject constructor(
     private val previewRepository: RoutePreviewRepository,
     private val tugRepository: TugRepository,
+    private val agent: RoutePlanningAgent,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(MapRouteUiState())
@@ -173,6 +176,35 @@ class MapRouteViewModel @Inject constructor(
         }
     }
 
+    /** AI 에이전트 워크플로우 실행(프로필→선호도→경로→설명). */
+    fun runAgent() {
+        val state = _uiState.value
+        viewModelScope.launch {
+            _uiState.update { it.copy(isAgentRunning = true) }
+            val start = selectedStart ?: previewRepository.geocode(state.startQuery)
+            val end = selectedEnd ?: previewRepository.geocode(state.endQuery)
+            if (start == null || end == null) {
+                _uiState.update {
+                    it.copy(
+                        isAgentRunning = false,
+                        statusMessage = "출발지/도착지를 먼저 확인하세요.",
+                        isError = true,
+                    )
+                }
+                return@launch
+            }
+            val report = agent.plan(start, end)
+            _uiState.update {
+                it.copy(
+                    isAgentRunning = false,
+                    agentReport = report,
+                    resolvedStart = start.point,
+                    resolvedEnd = end.point,
+                )
+            }
+        }
+    }
+
     private companion object {
         const val SuggestDebounceMillis = 250L
     }
@@ -195,4 +227,6 @@ data class MapRouteUiState(
     val resolvedEnd: GeoPoint? = null,
     val statusMessage: String? = null,
     val isError: Boolean = false,
+    val isAgentRunning: Boolean = false,
+    val agentReport: AgentReport? = null,
 )
