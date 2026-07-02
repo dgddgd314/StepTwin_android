@@ -162,6 +162,12 @@ class MapRouteViewModel @Inject constructor(
                             isError = false,
                         )
                     }
+                    RoutePreviewResult.NoRoute -> base.copy(
+                        preview = null,
+                        navState = NavigationState.Idle,
+                        statusMessage = "연결 가능한 경로를 찾지 못했습니다(404). 다른 출발/도착지를 시도하세요.",
+                        isError = false,
+                    )
                     RoutePreviewResult.InvalidRequest -> base.copy(
                         preview = null,
                         navState = NavigationState.Idle,

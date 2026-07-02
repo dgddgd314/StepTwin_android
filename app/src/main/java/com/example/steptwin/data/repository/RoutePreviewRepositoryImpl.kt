@@ -52,6 +52,7 @@ class RoutePreviewRepositoryImpl @Inject constructor(
             RoutePreviewResult.Success(response.toDomain())
         } catch (e: HttpException) {
             when (e.code()) {
+                404 -> RoutePreviewResult.NoRoute
                 422 -> RoutePreviewResult.InvalidRequest
                 500, 503 -> RoutePreviewResult.BackendError
                 else -> RoutePreviewResult.Failure("HTTP ${e.code()}")

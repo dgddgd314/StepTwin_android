@@ -5,6 +5,7 @@ import com.example.steptwin.domain.preview.MarkerKind
 import com.example.steptwin.domain.preview.PreviewMarker
 import com.example.steptwin.domain.preview.PreviewSegment
 import com.example.steptwin.domain.preview.RoutePreview
+import com.example.steptwin.domain.preview.RouteSummary
 import com.example.steptwin.domain.preview.RouteViewport
 import com.example.steptwin.domain.preview.SegmentKind
 import com.example.steptwin.domain.preview.SegmentStyle
@@ -104,8 +105,9 @@ data class HealthResponse(
     val status: String? = null,
 )
 
-/** 서버 RoutePreviewResponse. 지도 렌더링에 필요한 segments/markers/viewport 만 파싱한다. */
+/** 서버 RoutePreviewResponse. segments/markers/viewport/summary 파싱(debug 는 무시). */
 data class RoutePreviewResponse(
+    val summary: SummaryDto? = null,
     val segments: List<SegmentDto> = emptyList(),
     val markers: List<MarkerDto> = emptyList(),
     val viewport: ViewportDto? = null,
@@ -114,6 +116,21 @@ data class RoutePreviewResponse(
         segments = segments.mapNotNull { it.toDomain() },
         markers = markers.mapNotNull { it.toDomain() },
         viewport = viewport?.toDomain(),
+        summary = summary?.toDomain(),
+    )
+}
+
+data class SummaryDto(
+    val total_distance_meters: Int? = null,
+    val total_duration_seconds: Int? = null,
+    val walking_distance_meters: Int? = null,
+    val transit_distance_meters: Int? = null,
+) {
+    fun toDomain(): RouteSummary = RouteSummary(
+        totalDistanceMeters = total_distance_meters ?: 0,
+        totalDurationSeconds = total_duration_seconds ?: 0,
+        walkingDistanceMeters = walking_distance_meters ?: 0,
+        transitDistanceMeters = transit_distance_meters ?: 0,
     )
 }
 

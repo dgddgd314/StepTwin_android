@@ -9,6 +9,15 @@ data class RoutePreview(
     val segments: List<PreviewSegment>,
     val markers: List<PreviewMarker>,
     val viewport: RouteViewport? = null,
+    val summary: RouteSummary? = null,
+)
+
+/** 경로 요약(전체 거리/시간, 도보/대중교통 거리). */
+data class RouteSummary(
+    val totalDistanceMeters: Int,
+    val totalDurationSeconds: Int,
+    val walkingDistanceMeters: Int,
+    val transitDistanceMeters: Int,
 )
 
 /** 응답 viewport(카메라 fit용 남서/북동 경계). */
@@ -20,6 +29,8 @@ data class RouteViewport(
 /** routes/preview 호출 결과(HTTP 상태 반영). */
 sealed interface RoutePreviewResult {
     data class Success(val preview: RoutePreview) : RoutePreviewResult
+    /** 404: 도보 그래프에서 연결 가능한 경로 없음. */
+    data object NoRoute : RoutePreviewResult
     /** 422: 잘못된 요청(필드/좌표/선호값). */
     data object InvalidRequest : RoutePreviewResult
     /** 500/503: 백엔드/TMAP/DB 오류. */

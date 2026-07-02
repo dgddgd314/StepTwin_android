@@ -343,10 +343,20 @@ private fun RoutePreviewBar(
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Text(
-                text = "경로 준비 완료 · ${preview.segments.size}개 구간, ${preview.markers.size}개 지점",
-                style = MaterialTheme.typography.bodyMedium,
-            )
+            val summary = preview.summary
+            if (summary != null) {
+                Text(
+                    text = "총 ${summary.totalDistanceMeters}m · ${summary.totalDurationSeconds / 60}분 " +
+                        "${summary.totalDurationSeconds % 60}초 · 도보 ${summary.walkingDistanceMeters}m · " +
+                        "대중교통 ${summary.transitDistanceMeters}m",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            } else {
+                Text(
+                    text = "경로 준비 완료 · ${preview.segments.size}개 구간, ${preview.markers.size}개 지점",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Button(onClick = onStartNavigation, enabled = uiState.canNavigate) {
                     Text(text = "길안내 시작")
@@ -500,7 +510,8 @@ private fun PreviewMarker.iconRes(): Int {
     when (icon?.lowercase()) {
         "origin", "start" -> return R.drawable.ic_marker_origin
         "destination", "goal" -> return R.drawable.ic_marker_destination
-        "transit-stop", "stop", "bus", "subway" -> return R.drawable.ic_marker_stop
+        "transit-stop", "stop", "bus", "subway", "bus-stop", "subway-stop" ->
+            return R.drawable.ic_marker_stop
         "parasol", "shade" -> return R.drawable.ic_marker_parasol
         "tree" -> return R.drawable.ic_marker_parasol
         "stairs-off", "stairs", "stairs_avoided" -> return R.drawable.ic_marker_stairs
