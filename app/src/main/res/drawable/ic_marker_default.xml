@@ -1,0 +1,13 @@
+<!-- 기본 마커 (알 수 없는 kind) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="36dp"
+    android:height="36dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <path
+        android:fillColor="#2563EB"
+        android:pathData="M24,2 a22,22 0 1 0 0.01,0 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M24,14 a10,10 0 1 0 0.01,0 Z" />
+</vector>

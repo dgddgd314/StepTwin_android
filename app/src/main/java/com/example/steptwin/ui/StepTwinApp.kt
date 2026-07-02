@@ -17,10 +17,10 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.steptwin.R
 import com.example.steptwin.ui.gait.TugMeasureScreen
 import com.example.steptwin.ui.gait.TugMeasureViewModel
+import com.example.steptwin.ui.map.MapRouteScreen
+import com.example.steptwin.ui.map.MapRouteViewModel
 import com.example.steptwin.ui.profile.ProfileScreen
 import com.example.steptwin.ui.profile.ProfileViewModel
-import com.example.steptwin.ui.route.RouteScreen
-import com.example.steptwin.ui.route.RouteViewModel
 
 @Composable
 fun StepTwinApp() {
@@ -56,8 +56,8 @@ fun StepTwinApp() {
             }
 
             AppDestination.Route -> {
-                val viewModel: RouteViewModel = hiltViewModel()
-                RouteScreen(
+                val viewModel: MapRouteViewModel = hiltViewModel()
+                MapRouteScreen(
                     viewModel = viewModel,
                     modifier = contentModifier,
                 )

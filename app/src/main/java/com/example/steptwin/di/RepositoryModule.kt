@@ -1,6 +1,8 @@
 package com.example.steptwin.di
 
+import com.example.steptwin.data.repository.RoutePreviewRepositoryImpl
 import com.example.steptwin.data.repository.TugRepositoryImpl
+import com.example.steptwin.domain.repository.RoutePreviewRepository
 import com.example.steptwin.domain.repository.TugRepository
 import dagger.Binds
 import dagger.Module
@@ -14,4 +16,10 @@ abstract class RepositoryModule {
     @Binds
     @Singleton
     abstract fun bindTugRepository(impl: TugRepositoryImpl): TugRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindRoutePreviewRepository(
+        impl: RoutePreviewRepositoryImpl,
+    ): RoutePreviewRepository
 }
