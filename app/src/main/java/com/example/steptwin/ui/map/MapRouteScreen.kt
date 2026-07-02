@@ -7,7 +7,8 @@ import android.graphics.Canvas
 import android.graphics.Color as AndroidColor
 import android.graphics.drawable.BitmapDrawable
 import androidx.annotation.DrawableRes
-import androidx.core.content.ContextCompat
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,10 +16,12 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -29,18 +32,18 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import com.example.steptwin.R
-import com.example.steptwin.domain.preview.MarkerKind
-import com.example.steptwin.domain.preview.PreviewMarker
-import com.example.steptwin.domain.preview.PreviewSegment
-import com.example.steptwin.domain.preview.RoutePreview
-import com.example.steptwin.domain.preview.SegmentKind
+import com.example.steptwin.domain.preview.GeoPoint
+import com.example.steptwin.domain.preview.PlaceSuggestion
+import com.example.steptwin.domain.preview.WalkRoute
 import com.kakao.vectormap.KakaoMap
 import com.kakao.vectormap.KakaoMapReadyCallback
 import com.kakao.vectormap.LatLng
@@ -51,15 +54,15 @@ import com.kakao.vectormap.label.LabelOptions
 import com.kakao.vectormap.label.LabelStyle
 import com.kakao.vectormap.label.LabelStyles
 import com.kakao.vectormap.route.RouteLineOptions
-import com.kakao.vectormap.route.RouteLinePattern
 import com.kakao.vectormap.route.RouteLineSegment
 import com.kakao.vectormap.route.RouteLineStyle
 import com.kakao.vectormap.route.RouteLineStyles
 import com.kakao.vectormap.route.RouteLineStylesSet
 
-// 데모 구간 중심(청량리역 부근). 데이터가 없을 때 기본 카메라 위치로 사용한다.
-private val DemoCenter = LatLng.from(37.5804, 127.0468)
+private val DemoCenter = LatLng.from(37.5916, 127.0547)
 private const val DemoZoom = 15
+private const val RouteColorHex = "#16A34A"
+private const val RouteWidth = 6f
 
 @Composable
 fun MapRouteScreen(
@@ -69,15 +72,12 @@ fun MapRouteScreen(
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
 
-    // 카카오 지도 네이티브 라이브러리가 없는 기기(x86_64 에뮬레이터 등)에서는
-    // MapView 를 만들면 크래시하므로 안내만 보여준다.
     if (!MapSupport.available) {
         MapUnsupportedNotice(modifier = modifier)
         return
     }
 
     val lifecycleOwner = remember(context) { context.findLifecycleOwner() }
-
     val kakaoMapState = remember { mutableStateOf<KakaoMap?>(null) }
     val mapView = remember {
         MapView(context).also { view ->
@@ -87,9 +87,7 @@ fun MapRouteScreen(
                         kakaoMapState.value = null
                     }
 
-                    override fun onMapError(error: Exception) {
-                        // 인증 실패(앱 키 미설정) 등은 여기로 온다. 데모에서는 조용히 무시.
-                    }
+                    override fun onMapError(error: Exception) = Unit
                 },
                 object : KakaoMapReadyCallback() {
                     override fun onMapReady(map: KakaoMap) {
@@ -105,7 +103,6 @@ fun MapRouteScreen(
         }
     }
 
-    // MapView 는 액티비티 생명주기에 맞춰 resume/pause/finish 되어야 한다.
     DisposableEffect(lifecycleOwner) {
         if (lifecycleOwner == null) return@DisposableEffect onDispose { mapView.finish() }
         val observer = LifecycleEventObserver { _, event ->
@@ -122,22 +119,21 @@ fun MapRouteScreen(
         }
     }
 
-    // 지도 준비 + 서버 데이터가 모두 준비되면 그린다.
-    LaunchedEffect(kakaoMapState.value, uiState.preview) {
+    // 지도 준비 + 상태 변경 시 다시 그린다(경로 없음이어도 마커는 갱신).
+    LaunchedEffect(kakaoMapState.value, uiState.route, uiState.resolvedStart, uiState.resolvedEnd) {
         val map = kakaoMapState.value ?: return@LaunchedEffect
-        val preview = uiState.preview ?: return@LaunchedEffect
-        drawPreview(map, preview, context)
+        drawWalkRoute(map, uiState.route, uiState.resolvedStart, uiState.resolvedEnd, context)
     }
 
     Box(modifier = modifier.fillMaxSize()) {
-        AndroidView(
-            factory = { mapView },
-            modifier = Modifier.fillMaxSize(),
-        )
-
-        StatusBanner(
+        AndroidView(factory = { mapView }, modifier = Modifier.fillMaxSize())
+        SearchPanel(
             uiState = uiState,
-            onRefresh = viewModel::refresh,
+            onStartChange = viewModel::updateStartQuery,
+            onEndChange = viewModel::updateEndQuery,
+            onSelectStart = viewModel::selectStart,
+            onSelectEnd = viewModel::selectEnd,
+            onSearch = viewModel::search,
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
@@ -178,9 +174,13 @@ private fun MapUnsupportedNotice(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun StatusBanner(
+private fun SearchPanel(
     uiState: MapRouteUiState,
-    onRefresh: () -> Unit,
+    onStartChange: (String) -> Unit,
+    onEndChange: (String) -> Unit,
+    onSelectStart: (PlaceSuggestion) -> Unit,
+    onSelectEnd: (PlaceSuggestion) -> Unit,
+    onSearch: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Card(modifier = modifier) {
@@ -190,30 +190,29 @@ private fun StatusBanner(
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Text(
-                text = "맞춤 길찾기",
-                style = MaterialTheme.typography.titleMedium,
-            )
+            Text(text = "맞춤 길찾기", style = MaterialTheme.typography.titleMedium)
 
-            val serverText = when (uiState.serverHealthy) {
-                true -> "서버 연결됨"
-                false -> "서버 응답 없음"
-                null -> "서버 확인 중"
+            OutlinedTextField(
+                value = uiState.startQuery,
+                onValueChange = onStartChange,
+                label = { Text("출발지") },
+                singleLine = true,
+                enabled = !uiState.isLoading,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            if (uiState.activeField == ActiveField.START) {
+                SuggestionList(uiState.startSuggestions, onSelectStart)
             }
-            val segmentCount = uiState.preview?.segments?.size ?: 0
-            val markerCount = uiState.preview?.markers?.size ?: 0
-
-            Text(
-                text = "$serverText · 경로 ${segmentCount}구간 · 마커 ${markerCount}개",
-                style = MaterialTheme.typography.bodySmall,
+            OutlinedTextField(
+                value = uiState.endQuery,
+                onValueChange = onEndChange,
+                label = { Text("도착지") },
+                singleLine = true,
+                enabled = !uiState.isLoading,
+                modifier = Modifier.fillMaxWidth(),
             )
-
-            uiState.error?.let {
-                Text(
-                    text = it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
+            if (uiState.activeField == ActiveField.END) {
+                SuggestionList(uiState.endSuggestions, onSelectEnd)
             }
 
             Row(
@@ -221,19 +220,79 @@ private fun StatusBanner(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Button(onClick = onRefresh, enabled = !uiState.isLoading) {
-                    Text(text = "경로 새로고침")
+                Button(onClick = onSearch, enabled = !uiState.isLoading) {
+                    Text(text = "길찾기")
                 }
                 if (uiState.isLoading) {
                     CircularProgressIndicator(modifier = Modifier.padding(4.dp))
+                }
+            }
+
+            val route = uiState.route
+            if (route?.metrics != null) {
+                val m = route.metrics
+                Text(
+                    text = "거리 ${m.distanceMeters}m · 시간 ${m.durationSeconds / 60}분 " +
+                        "${m.durationSeconds % 60}초 · 계단 ${m.stairsCount} · 그늘막 ${m.shadeShelters}",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+
+            uiState.statusMessage?.let { message ->
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (uiState.isError) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SuggestionList(
+    suggestions: List<PlaceSuggestion>,
+    onSelect: (PlaceSuggestion) -> Unit,
+) {
+    if (suggestions.isEmpty()) return
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        suggestions.take(5).forEach { suggestion ->
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onSelect(suggestion) }
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+            ) {
+                Text(text = suggestion.name, style = MaterialTheme.typography.bodyMedium)
+                if (suggestion.address.isNotBlank()) {
+                    Text(
+                        text = suggestion.address,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }
     }
 }
 
-/** 서버가 준 segments/markers 를 지도 위에 그린다. 매 호출 시 이전 렌더링을 지운다. */
-private fun drawPreview(map: KakaoMap, preview: RoutePreview, context: Context) {
+/** WalkRoute geometry 를 초록 실선 polyline 으로, 출발/도착을 마커로 그린다. */
+private fun drawWalkRoute(
+    map: KakaoMap,
+    route: WalkRoute?,
+    resolvedStart: GeoPoint?,
+    resolvedEnd: GeoPoint?,
+    context: Context,
+) {
     val routeLayer = map.routeLineManager?.layer
     val labelManager = map.labelManager
     val labelLayer = labelManager?.layer
@@ -241,111 +300,57 @@ private fun drawPreview(map: KakaoMap, preview: RoutePreview, context: Context) 
     routeLayer?.removeAll()
     labelLayer?.removeAll()
 
-    if (routeLayer != null) {
-        preview.segments.forEach { segment ->
-            val points = segment.geometry.map { LatLng.from(it.latitude, it.longitude) }
-            if (points.size < 2) return@forEach
-
-            val style = RouteLineStyle.from(segment.lineWidth(), segment.lineColor()).let { base ->
-                if (segment.style.dashed) {
-                    // 카카오 네이티브는 비트맵을 요구한다. 벡터를 넘기면 makeImage() 에서 크래시.
-                    base.setPattern(
-                        RouteLinePattern.from(context.rasterize(R.drawable.route_dash_pattern), 24f),
-                    )
-                } else {
-                    base
-                }
-            }
-            val stylesSet = RouteLineStylesSet.from(RouteLineStyles.from(style))
-            val lineSegment = RouteLineSegment.from(points, stylesSet.getStyles(0))
-            routeLayer.addRouteLine(
-                RouteLineOptions.from(lineSegment).setStylesSet(stylesSet),
-            )
-        }
-    }
-
+    // 출발/도착 마커 (경로 없어도 표시). 스냅 좌표 우선, 없으면 지오코딩 좌표.
+    val startPt = route?.start ?: resolvedStart
+    val endPt = route?.end ?: resolvedEnd
     if (labelManager != null && labelLayer != null) {
-        preview.markers.forEach { marker ->
-            val styles = labelManager.addLabelStyles(
-                LabelStyles.from(LabelStyle.from(context.rasterize(marker.iconRes()))),
-            )
-            labelLayer.addLabel(
-                LabelOptions
-                    .from(LatLng.from(marker.coordinate.latitude, marker.coordinate.longitude))
-                    .setStyles(styles),
-            )
+        startPt?.let {
+            addMarker(labelManager, labelLayer, it, context.rasterize(R.drawable.ic_marker_origin))
+        }
+        endPt?.let {
+            addMarker(labelManager, labelLayer, it, context.rasterize(R.drawable.ic_marker_destination))
         }
     }
 
-    // 경로/마커 전체가 화면에 들어오도록 카메라를 맞춘다.
-    val allPoints = preview.allPoints()
-    when {
-        allPoints.size >= 2 ->
-            map.moveCamera(CameraUpdateFactory.fitMapPoints(allPoints.toTypedArray(), 120))
-        allPoints.size == 1 ->
-            map.moveCamera(CameraUpdateFactory.newCenterPosition(allPoints.first(), DemoZoom))
+    // 경로 polyline (초록 실선, 폭 6)
+    val geometry = route?.geometry.orEmpty()
+    if (routeLayer != null && geometry.size >= 2) {
+        val points = geometry.map { LatLng.from(it.latitude, it.longitude) }
+        val style = RouteLineStyle.from(RouteWidth, AndroidColor.parseColor(RouteColorHex))
+        val stylesSet = RouteLineStylesSet.from(RouteLineStyles.from(style))
+        val segment = RouteLineSegment.from(points, stylesSet.getStyles(0))
+        routeLayer.addRouteLine(RouteLineOptions.from(segment).setStylesSet(stylesSet))
+    }
+
+    // 카메라: 경로가 있으면 경로 전체, 없으면 출발/도착만 담는다.
+    val camPoints = when {
+        geometry.size >= 2 -> geometry.map { LatLng.from(it.latitude, it.longitude) }
+        startPt != null && endPt != null ->
+            listOf(startPt, endPt).map { LatLng.from(it.latitude, it.longitude) }
+        else -> emptyList()
+    }
+    if (camPoints.size >= 2) {
+        map.moveCamera(CameraUpdateFactory.fitMapPoints(camPoints.toTypedArray(), 120))
     }
 }
 
-private fun PreviewSegment.lineColor(): Int {
-    style.colorHex?.let { hex ->
-        runCatching { AndroidColor.parseColor(hex) }.getOrNull()?.let { return it }
-    }
-    return when (kind) {
-        SegmentKind.TRANSIT -> AndroidColor.parseColor("#2563EB")
-        SegmentKind.CUSTOM_WALK -> AndroidColor.parseColor("#16A34A")
-        SegmentKind.UNKNOWN -> AndroidColor.parseColor("#6B7280")
-    }
+private fun addMarker(
+    labelManager: com.kakao.vectormap.label.LabelManager,
+    labelLayer: com.kakao.vectormap.label.LabelLayer,
+    point: GeoPoint,
+    icon: Bitmap,
+) {
+    val styles = labelManager.addLabelStyles(LabelStyles.from(LabelStyle.from(icon)))
+    labelLayer.addLabel(
+        LabelOptions.from(LatLng.from(point.latitude, point.longitude)).setStyles(styles),
+    )
 }
 
-private fun PreviewSegment.lineWidth(): Float {
-    // 서버가 준 두께(1~16)를 우선 사용, 없으면 kind 기본값.
-    style.width?.let { return it.toFloat() }
-    return when (kind) {
-        SegmentKind.TRANSIT -> 16f
-        else -> 12f
-    }
-}
-
-private fun PreviewMarker.iconRes(): Int {
-    // 서버 icon 힌트를 먼저 보고, 없으면 kind 로 판단한다.
-    when (icon?.lowercase()) {
-        "parasol", "shade" -> return R.drawable.ic_marker_parasol
-        "tree" -> return R.drawable.ic_marker_parasol
-        "stairs-off", "stairs", "stairs_avoided" -> return R.drawable.ic_marker_stairs
-        "transit-stop", "stop", "bus", "subway" -> return R.drawable.ic_marker_stop
-        "origin", "start" -> return R.drawable.ic_marker_origin
-        "destination", "goal" -> return R.drawable.ic_marker_destination
-    }
-    return when (kind) {
-        MarkerKind.SHADE_SHELTER -> R.drawable.ic_marker_parasol
-        MarkerKind.STAIRS_AVOIDED -> R.drawable.ic_marker_stairs
-        MarkerKind.STOP -> R.drawable.ic_marker_stop
-        MarkerKind.ORIGIN -> R.drawable.ic_marker_origin
-        MarkerKind.DESTINATION -> R.drawable.ic_marker_destination
-        MarkerKind.UNKNOWN -> R.drawable.ic_marker_default
-    }
-}
-
-private fun RoutePreview.allPoints(): List<LatLng> {
-    val points = mutableListOf<LatLng>()
-    segments.forEach { segment ->
-        segment.geometry.forEach { points += LatLng.from(it.latitude, it.longitude) }
-    }
-    markers.forEach { points += LatLng.from(it.coordinate.latitude, it.coordinate.longitude) }
-    return points
-}
-
-/**
- * 드로어블(벡터 포함)을 비트맵으로 래스터화한다.
- * 카카오 지도 마커/패턴은 네이티브에서 비트맵을 요구하므로, 벡터를 직접 넘기면 크래시한다.
- */
+/** 드로어블(벡터 포함)을 비트맵으로 래스터화(카카오 마커는 비트맵 필요). */
 private fun Context.rasterize(@DrawableRes resId: Int): Bitmap {
     val drawable = ContextCompat.getDrawable(this, resId)
         ?: return Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
-    if (drawable is BitmapDrawable && drawable.bitmap != null) {
-        return drawable.bitmap
-    }
+    if (drawable is BitmapDrawable && drawable.bitmap != null) return drawable.bitmap
     val width = drawable.intrinsicWidth.coerceAtLeast(1)
     val height = drawable.intrinsicHeight.coerceAtLeast(1)
     val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)

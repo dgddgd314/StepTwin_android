@@ -50,4 +50,16 @@ object NetworkModule {
     fun provideRouteApi(retrofit: Retrofit): RouteApi {
         return retrofit.create(RouteApi::class.java)
     }
+
+    @Provides
+    @Singleton
+    fun provideKakaoLocalApi(okHttpClient: OkHttpClient): com.example.steptwin.data.remote.KakaoLocalApi {
+        // 카카오 로컬 API 는 별도 base URL(dapi.kakao.com) 을 쓴다.
+        return Retrofit.Builder()
+            .baseUrl("https://dapi.kakao.com/")
+            .client(okHttpClient)
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+            .create(com.example.steptwin.data.remote.KakaoLocalApi::class.java)
+    }
 }
