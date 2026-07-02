@@ -27,8 +27,11 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -49,7 +52,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import java.util.Locale
 import kotlin.math.roundToInt
-import com.example.steptwin.domain.gait.FallRisk
 import com.example.steptwin.domain.gait.SensorSampleType
 import com.example.steptwin.domain.gait.TugMetrics
 import com.example.steptwin.domain.gait.TugPhase
@@ -64,7 +66,7 @@ fun TugMeasureScreen(
     val uiState by viewModel.uiState.collectAsState()
 
     TugSensorBridge(
-        isRecording = uiState.isRecording,
+        isSensing = uiState.isSensing,
         onSample = viewModel::addSensorData,
     )
 
@@ -81,14 +83,19 @@ fun TugMeasureScreen(
     }
     LaunchedEffect(uiState.status) {
         when (uiState.status) {
+            TugMeasureStatus.Baseline ->
+                speaker.speak("잠시 가만히 계세요. 기준을 측정합니다.")
             TugMeasureStatus.Recording ->
                 speaker.speak("시작하세요. 일어나서 삼 미터 걷고, 돌아서 제자리로 돌아와 앉으세요.")
             TugMeasureStatus.Complete -> {
                 val m = uiState.metrics
                 if (m != null) {
-                    speaker.speak(
-                        "측정 완료. 소요 시간 ${m.tugTimeSec.roundToInt()}초. 낙상 위험 ${m.fallRisk.label}.",
-                    )
+                    val follow = if (m.assessment.needsFollowUp) {
+                        "이동기능 추가평가를 권장합니다."
+                    } else {
+                        "특이 신호는 낮은 편입니다."
+                    }
+                    speaker.speak("측정 완료. 임상 소요 시간 ${m.clinicalTugSec.roundToInt()}초. $follow")
                 } else {
                     speaker.speak("측정 완료.")
                 }
@@ -112,8 +119,16 @@ fun TugMeasureScreen(
         )
 
         when (uiState.status) {
-            TugMeasureStatus.Idle -> IdleIntro(onStart = viewModel::startRecording)
+            TugMeasureStatus.Idle -> IdleIntro(
+                uiState = uiState,
+                onStart = viewModel::startRecording,
+                onManualTugChange = viewModel::updateManualTug,
+                onManualGaitChange = viewModel::updateManualGait,
+                onManualTurnChange = viewModel::updateManualTurn,
+                onSubmitManual = viewModel::submitManual,
+            )
             TugMeasureStatus.Countdown -> CountdownView(value = uiState.countdownValue)
+            TugMeasureStatus.Baseline -> BaselineView(message = uiState.message)
             TugMeasureStatus.Recording -> RecordingView(
                 uiState = uiState,
                 onFinish = viewModel::finishRecording,
@@ -130,7 +145,14 @@ fun TugMeasureScreen(
 // ---------------- 상태별 화면 ----------------
 
 @Composable
-private fun IdleIntro(onStart: () -> Unit) {
+private fun IdleIntro(
+    uiState: TugMeasureUiState,
+    onStart: () -> Unit,
+    onManualTugChange: (String) -> Unit,
+    onManualGaitChange: (String) -> Unit,
+    onManualTurnChange: (String) -> Unit,
+    onSubmitManual: () -> Unit,
+) {
     Text(text = "TUG(Timed Up and Go) 검사는 다음 순서로 진행합니다.")
     Card {
         Column(
@@ -155,6 +177,49 @@ private fun IdleIntro(onStart: () -> Unit) {
     Button(onClick = onStart) {
         Text(text = "TUG 검사 시작")
     }
+
+    HorizontalDivider()
+
+    // 의료진 직접 입력(측정 대체)
+    Text(text = "의료진 직접 입력", style = MaterialTheme.typography.titleMedium)
+    Text(
+        text = "다른 곳에서 이미 TUG를 측정했다면 값을 입력해 결과를 받을 수 있습니다.",
+        style = MaterialTheme.typography.bodySmall,
+    )
+    OutlinedTextField(
+        value = uiState.manualTug,
+        onValueChange = onManualTugChange,
+        label = { Text(text = "TUG 총시간 (초, 필수)") },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+        modifier = Modifier.fillMaxWidth(),
+    )
+    OutlinedTextField(
+        value = uiState.manualGait,
+        onValueChange = onManualGaitChange,
+        label = { Text(text = "보행속도 (m/s, 선택)") },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+        modifier = Modifier.fillMaxWidth(),
+    )
+    OutlinedTextField(
+        value = uiState.manualTurn,
+        onValueChange = onManualTurnChange,
+        label = { Text(text = "180° 회전시간 (초, 선택)") },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+        modifier = Modifier.fillMaxWidth(),
+    )
+    if (uiState.manualError != null) {
+        Text(
+            text = uiState.manualError,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+    }
+    OutlinedButton(onClick = onSubmitManual, modifier = Modifier.fillMaxWidth()) {
+        Text(text = "입력값으로 결과 보기")
+    }
 }
 
 @Composable
@@ -176,6 +241,25 @@ private fun CountdownView(value: Int) {
                 text = "의자에 앉은 채로 기다리세요.",
                 style = MaterialTheme.typography.bodyMedium,
             )
+        }
+    }
+}
+
+@Composable
+private fun BaselineView(message: String) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(220.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(text = "기준신호 측정 중", style = MaterialTheme.typography.titleMedium)
+            CircularProgressIndicator()
+            Text(text = message, style = MaterialTheme.typography.bodyMedium)
         }
     }
 }
@@ -282,28 +366,68 @@ private fun ResultView(
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
+                val assess = metrics.assessment
                 Text(text = "TUG 결과", style = MaterialTheme.typography.titleMedium)
+                if (uiState.manualEntry) {
+                    Text(
+                        text = "※ 의료진이 입력한 TUG 값 기반 결과입니다(세부 구간은 추정).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.tertiary,
+                    )
+                }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.Bottom,
                 ) {
                     Text(
-                        text = "${"%.1f".format(metrics.tugTimeSec)}초",
+                        text = "${"%.1f".format(metrics.clinicalTugSec)}초",
                         style = MaterialTheme.typography.displaySmall,
                         fontWeight = FontWeight.Bold,
                     )
                     Text(
-                        text = "낙상위험 ${metrics.fallRisk.label}",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = metrics.fallRisk.color(),
+                        text = if (assess.needsFollowUp) "이동기능 추가평가 권장" else "추가 신호 낮음",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = if (assess.needsFollowUp) TurnColor else WalkColor,
                     )
                 }
+                // 시간 3종 분리(서로 다른 조건의 임상 컷오프 오적용 방지)
+                Text(
+                    text = "임상 ${"%.1f".format(metrics.clinicalTugSec)}초 · " +
+                        "동작 ${"%.1f".format(metrics.movementSec)}초 · " +
+                        "반응 ${"%.1f".format(metrics.reactionSec)}초",
+                    style = MaterialTheme.typography.bodySmall,
+                )
                 HorizontalDivider()
-                MetricRow("일어서기", "${"%.1f".format(metrics.standSec)}초")
+                MetricRow("기립(sit-to-stand)", "${"%.1f".format(metrics.standSec)}초")
                 MetricRow("보행(왕복)", "${"%.1f".format(metrics.walkSec)}초")
-                MetricRow("회전", "${"%.1f".format(metrics.turnSec)}초")
-                MetricRow("추정 보행속도", "${"%.2f".format(metrics.gaitSpeedMps)} m/s")
+                MetricRow("180° 회전", "${"%.1f".format(metrics.turn180Sec)}초")
+                MetricRow("의자앞 회전", "${"%.1f".format(metrics.turnToSitSec)}초")
+                MetricRow("착석(stand-to-sit)", "${"%.1f".format(metrics.sitSec)}초")
+                MetricRow(
+                    "추정 보행속도",
+                    "${"%.2f".format(metrics.gaitSpeedMps)} m/s (${assess.gaitBand.label})",
+                )
+
+                if (metrics.unstableMount) {
+                    Text(
+                        text = "⚠ 정지 기준신호에서 폰 고정이 불안정했습니다. 결과 신뢰도가 낮을 수 있어요.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TurnColor,
+                    )
+                }
+
+                if (assess.tags.isNotEmpty()) {
+                    HorizontalDivider()
+                    assess.tags.forEach { tag ->
+                        Text(text = "• $tag", style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+                Text(
+                    text = "본 결과는 낙상·허약을 진단하지 않으며, 낙상이력·근력·균형·인지·약물·보행환경과 " +
+                        "함께 해석해야 합니다. 정확한 보행속도는 별도 4m 보행검사를 권장합니다.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
         }
     }
@@ -383,27 +507,28 @@ private fun MetricRow(label: String, value: String) {
 
 @Composable
 private fun TugSensorBridge(
-    isRecording: Boolean,
+    isSensing: Boolean,
     onSample: (SensorSampleType, Long, Float, Float, Float) -> Unit,
 ) {
     val context = LocalContext.current
     val latestOnSample by rememberUpdatedState(onSample)
 
-    DisposableEffect(isRecording, context) {
-        if (!isRecording) {
+    DisposableEffect(isSensing, context) {
+        if (!isSensing) {
             onDispose {}
         } else {
             val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
             val accelerationSensor = sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
                 ?: sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
             val gyroscopeSensor = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
+            val gravitySensor = sensorManager.getDefaultSensor(Sensor.TYPE_GRAVITY)
 
             val listener = object : SensorEventListener {
                 override fun onSensorChanged(event: SensorEvent) {
-                    val type = if (event.sensor.type == Sensor.TYPE_GYROSCOPE) {
-                        SensorSampleType.Gyroscope
-                    } else {
-                        SensorSampleType.LinearAcceleration
+                    val type = when (event.sensor.type) {
+                        Sensor.TYPE_GYROSCOPE -> SensorSampleType.Gyroscope
+                        Sensor.TYPE_GRAVITY -> SensorSampleType.Gravity
+                        else -> SensorSampleType.LinearAcceleration
                     }
                     latestOnSample(
                         type,
@@ -421,6 +546,9 @@ private fun TugSensorBridge(
                 sensorManager.registerListener(listener, it, SensorManager.SENSOR_DELAY_GAME)
             }
             gyroscopeSensor?.let {
+                sensorManager.registerListener(listener, it, SensorManager.SENSOR_DELAY_GAME)
+            }
+            gravitySensor?.let {
                 sensorManager.registerListener(listener, it, SensorManager.SENSOR_DELAY_GAME)
             }
 
@@ -453,13 +581,6 @@ private fun TugPhase.label(): String = when (this) {
     TugPhase.Still -> "정지·자세전환"
     TugPhase.Walk -> "보행"
     TugPhase.Turn -> "회전"
-}
-
-private fun FallRisk.color(): Color = when (this) {
-    FallRisk.Low -> WalkColor
-    FallRisk.Moderate -> TurnColor
-    FallRisk.High -> Color(0xFFDC2626)
-    FallRisk.Unknown -> StillColor
 }
 
 @Composable

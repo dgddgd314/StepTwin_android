@@ -8,7 +8,36 @@ package com.example.steptwin.domain.preview
 data class RoutePreview(
     val segments: List<PreviewSegment>,
     val markers: List<PreviewMarker>,
+    val viewport: RouteViewport? = null,
+    val summary: RouteSummary? = null,
 )
+
+/** 경로 요약(전체 거리/시간, 도보/대중교통 거리). */
+data class RouteSummary(
+    val totalDistanceMeters: Int,
+    val totalDurationSeconds: Int,
+    val walkingDistanceMeters: Int,
+    val transitDistanceMeters: Int,
+)
+
+/** 응답 viewport(카메라 fit용 남서/북동 경계). */
+data class RouteViewport(
+    val southwest: GeoPoint,
+    val northeast: GeoPoint,
+)
+
+/** routes/preview 호출 결과(HTTP 상태 반영). */
+sealed interface RoutePreviewResult {
+    data class Success(val preview: RoutePreview) : RoutePreviewResult
+    /** 404: 도보 그래프에서 연결 가능한 경로 없음. */
+    data object NoRoute : RoutePreviewResult
+    /** 422: 잘못된 요청(필드/좌표/선호값). */
+    data object InvalidRequest : RoutePreviewResult
+    /** 500/503: 백엔드/TMAP/DB 오류. */
+    data object BackendError : RoutePreviewResult
+    /** 네트워크/기타 오류. */
+    data class Failure(val message: String?) : RoutePreviewResult
+}
 
 data class GeoPoint(
     val latitude: Double,
@@ -20,7 +49,32 @@ data class PreviewSegment(
     val kind: SegmentKind,
     val geometry: List<GeoPoint>,
     val style: SegmentStyle,
+    /** 대중교통 구간 상세(도보 구간은 null). */
+    val transit: TransitInfo? = null,
 )
+
+/** 대중교통 구간 상세(노선/정류장). */
+data class TransitInfo(
+    /** "subway" | "bus". */
+    val mode: String?,
+    val routeName: String?,
+    val busNumber: String?,
+    val subwayLine: String?,
+    val boardingStop: String?,
+    val alightingStop: String?,
+    val headsign: String?,
+) {
+    val isBus: Boolean get() = mode?.equals("bus", ignoreCase = true) == true
+    val isSubway: Boolean get() = mode?.equals("subway", ignoreCase = true) == true
+
+    /** 노선 표기: 지하철=노선명, 버스=번호. */
+    val lineLabel: String?
+        get() = when {
+            isSubway -> subwayLine ?: routeName
+            isBus -> busNumber ?: routeName
+            else -> routeName
+        }
+}
 
 data class SegmentStyle(
     /** "#16A34A" 형태의 색상. 없으면 kind 기본색을 사용한다. */

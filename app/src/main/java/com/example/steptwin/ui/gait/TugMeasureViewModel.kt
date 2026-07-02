@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.steptwin.domain.gait.SensorSample
 import com.example.steptwin.domain.gait.SensorSampleType
+import com.example.steptwin.domain.gait.TugBaseline
 import com.example.steptwin.domain.gait.TugMetrics
 import com.example.steptwin.domain.gait.TugPhase
 import com.example.steptwin.domain.gait.TugWeights
@@ -26,6 +27,8 @@ class TugMeasureViewModel @Inject constructor(
     private val repository: TugRepository,
 ) : ViewModel() {
     private val sampleBuffer = mutableListOf<SensorSample>()
+    private val baselineBuffer = mutableListOf<SensorSample>()
+    private var capturedBaseline: TugBaseline = TugBaseline.UNKNOWN
     private var recordingJob: Job? = null
     private var stopRequested = false
 
@@ -63,6 +66,8 @@ class TugMeasureViewModel @Inject constructor(
 
         recordingJob?.cancel()
         sampleBuffer.clear()
+        baselineBuffer.clear()
+        capturedBaseline = TugBaseline.UNKNOWN
         resetSignalState()
         resetSteps()
         stopRequested = false
@@ -78,7 +83,16 @@ class TugMeasureViewModel @Inject constructor(
                 delay(CountdownStepMillis)
             }
 
-            // 측정 시작(카운트업). 여기서부터 센서 수집.
+            // 정지 기준신호 측정(2초): 중력방향·자이로 영점·고정 안정성.
+            baselineBuffer.clear()
+            _uiState.value = TugMeasureUiState(
+                status = TugMeasureStatus.Baseline,
+                message = "폰이 흔들리지 않게 2초간 가만히 계세요.",
+            )
+            delay(BaselineMillis)
+            capturedBaseline = computeBaseline()
+
+            // 측정 시작(카운트업). 여기서부터 동작 센서 수집.
             resetSignalState()
             _uiState.value = TugMeasureUiState(
                 status = TugMeasureStatus.Recording,
@@ -124,6 +138,57 @@ class TugMeasureViewModel @Inject constructor(
         }
     }
 
+    // ---- 의료진 직접 입력 ----
+    fun updateManualTug(text: String) =
+        _uiState.update { it.copy(manualTug = text, manualError = null) }
+
+    fun updateManualGait(text: String) =
+        _uiState.update { it.copy(manualGait = text, manualError = null) }
+
+    fun updateManualTurn(text: String) =
+        _uiState.update { it.copy(manualTurn = text, manualError = null) }
+
+    fun submitManual() {
+        val state = _uiState.value
+        val tug = state.manualTug.trim().toFloatOrNull()
+        if (tug == null || tug <= 0f || tug > 120f) {
+            _uiState.update { it.copy(manualError = "TUG 총시간(초)을 올바르게 입력하세요.") }
+            return
+        }
+        val gait = state.manualGait.trim().takeIf { it.isNotEmpty() }?.toFloatOrNull()
+        if (state.manualGait.isNotBlank() && gait == null) {
+            _uiState.update { it.copy(manualError = "보행속도(m/s)를 숫자로 입력하세요.") }
+            return
+        }
+        val turn = state.manualTurn.trim().takeIf { it.isNotEmpty() }?.toFloatOrNull()
+        if (state.manualTurn.isNotBlank() && turn == null) {
+            _uiState.update { it.copy(manualError = "180° 회전시간(초)을 숫자로 입력하세요.") }
+            return
+        }
+
+        recordingJob?.cancel()
+        recordingJob = viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    status = TugMeasureStatus.Analyzing,
+                    manualError = null,
+                    message = "입력한 TUG 값으로 분석하고 있습니다.",
+                )
+            }
+            val result = repository.submitManual(tug, gait, turn)
+            _uiState.update {
+                it.copy(
+                    status = TugMeasureStatus.Complete,
+                    weights = result.weights,
+                    metrics = result.metrics,
+                    manualEntry = true,
+                    message = "의료진이 입력한 TUG 값으로 결과를 계산했습니다.",
+                    syncMessage = result.syncMessage,
+                )
+            }
+        }
+    }
+
     fun addSensorData(
         type: SensorSampleType,
         timestampNanos: Long,
@@ -131,20 +196,55 @@ class TugMeasureViewModel @Inject constructor(
         y: Float,
         z: Float,
     ) {
-        if (_uiState.value.status != TugMeasureStatus.Recording) return
-
-        sampleBuffer += SensorSample(type, timestampNanos, x, y, z)
-
-        val magnitude = sqrt(x * x + y * y + z * z)
-        if (type == SensorSampleType.Gyroscope) {
-            gyroSum += magnitude
-            gyroCount++
-            lastGyroMag = magnitude
-        } else {
-            accelSum += magnitude
-            accelCount++
-            lastAccelMag = magnitude
+        val sample = SensorSample(type, timestampNanos, x, y, z)
+        when (_uiState.value.status) {
+            TugMeasureStatus.Baseline -> baselineBuffer += sample // 중력·자이로·가속 모두 수집
+            TugMeasureStatus.Recording -> {
+                if (type == SensorSampleType.Gravity) return // 동작 분석엔 선형가속+자이로만
+                sampleBuffer += sample
+                val magnitude = sqrt(x * x + y * y + z * z)
+                if (type == SensorSampleType.Gyroscope) {
+                    gyroSum += magnitude
+                    gyroCount++
+                    lastGyroMag = magnitude
+                } else {
+                    accelSum += magnitude
+                    accelCount++
+                    lastAccelMag = magnitude
+                }
+            }
+            else -> Unit
         }
+    }
+
+    /** 정지 기준신호에서 중력방향·자이로 영점·고정 안정성을 계산한다. */
+    private fun computeBaseline(): TugBaseline {
+        val gravity = baselineBuffer.filter { it.type == SensorSampleType.Gravity }
+        if (gravity.isEmpty()) return TugBaseline.UNKNOWN
+        val gyro = baselineBuffer.filter { it.type == SensorSampleType.Gyroscope }
+        val accel = baselineBuffer.filter { it.type == SensorSampleType.LinearAcceleration }
+
+        val gx = gravity.map { it.x }.average().toFloat()
+        val gy = gravity.map { it.y }.average().toFloat()
+        val gz = gravity.map { it.z }.average().toFloat()
+        val ox = if (gyro.isEmpty()) 0f else gyro.map { it.x }.average().toFloat()
+        val oy = if (gyro.isEmpty()) 0f else gyro.map { it.y }.average().toFloat()
+        val oz = if (gyro.isEmpty()) 0f else gyro.map { it.z }.average().toFloat()
+
+        // 정지 중 선형가속/자이로 변동이 작아야 고정이 안정적
+        val accelStd = magStdev(accel)
+        val gyroStd = magStdev(gyro)
+        val stable = accelStd < StableAccelStd && gyroStd < StableGyroStd
+
+        return TugBaseline(gx, gy, gz, ox, oy, oz, stableMount = stable)
+    }
+
+    private fun magStdev(samples: List<SensorSample>): Float {
+        if (samples.size < 2) return 0f
+        val mags = samples.map { sqrt(it.x * it.x + it.y * it.y + it.z * it.z) }
+        val mean = mags.average()
+        val variance = mags.sumOf { (it - mean) * (it - mean) } / mags.size
+        return sqrt(variance).toFloat()
     }
 
     private fun sampleTick() {
@@ -204,6 +304,8 @@ class TugMeasureViewModel @Inject constructor(
         recordingJob?.cancel()
         stopRequested = false
         sampleBuffer.clear()
+        baselineBuffer.clear()
+        capturedBaseline = TugBaseline.UNKNOWN
         resetSignalState()
         resetSteps()
         _uiState.value = TugMeasureUiState()
@@ -219,7 +321,7 @@ class TugMeasureViewModel @Inject constructor(
             )
         }
 
-        val result = repository.analyzeAndSync(samples)
+        val result = repository.analyzeAndSync(samples, capturedBaseline)
         _uiState.update {
             it.copy(
                 status = TugMeasureStatus.Complete,
@@ -242,6 +344,9 @@ class TugMeasureViewModel @Inject constructor(
 
         private const val CountdownFrom = 3
         private const val CountdownStepMillis = 800L
+        private const val BaselineMillis = 2_000L // 정지 기준신호 수집 창
+        private const val StableAccelStd = 0.8f // 정지 중 선형가속 크기 표준편차 상한
+        private const val StableGyroStd = 0.3f // 정지 중 자이로 크기 표준편차 상한
         private const val MinDurationMillis = 4_000L // 자동 종료 최소 경과
         private const val MaxDurationMillis = 40_000L // 안전 상한
         private const val AutoStopStillTicks = 25 // 약 1.5초 정지 지속
@@ -270,8 +375,15 @@ data class TugMeasureUiState(
     val standDone: Boolean = false,
     val walkDone: Boolean = false,
     val turnDone: Boolean = false,
+    val manualTug: String = "",
+    val manualGait: String = "",
+    val manualTurn: String = "",
+    val manualError: String? = null,
+    val manualEntry: Boolean = false,
 ) {
     val isRecording: Boolean = status == TugMeasureStatus.Recording
+    /** 센서 리스너를 켜둘 구간(기준신호 + 측정). */
+    val isSensing: Boolean = status == TugMeasureStatus.Baseline || status == TugMeasureStatus.Recording
     val elapsedSeconds: Int = (elapsedMillis / 1_000L).toInt()
     val elapsedTenths: String = "%.1f".format(elapsedMillis / 1_000.0)
     val hasWaveform: Boolean = accelWave.isNotEmpty() || gyroWave.isNotEmpty()
@@ -280,6 +392,7 @@ data class TugMeasureUiState(
 enum class TugMeasureStatus {
     Idle,
     Countdown,
+    Baseline,
     Recording,
     Analyzing,
     Complete,

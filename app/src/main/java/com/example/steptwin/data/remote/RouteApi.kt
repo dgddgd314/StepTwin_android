@@ -5,8 +5,11 @@ import com.example.steptwin.domain.preview.MarkerKind
 import com.example.steptwin.domain.preview.PreviewMarker
 import com.example.steptwin.domain.preview.PreviewSegment
 import com.example.steptwin.domain.preview.RoutePreview
+import com.example.steptwin.domain.preview.RouteSummary
+import com.example.steptwin.domain.preview.RouteViewport
 import com.example.steptwin.domain.preview.SegmentKind
 import com.example.steptwin.domain.preview.SegmentStyle
+import com.example.steptwin.domain.preview.TransitInfo
 import com.example.steptwin.domain.preview.WalkMetrics
 import com.example.steptwin.domain.preview.WalkRoute
 import retrofit2.http.Body
@@ -103,21 +106,51 @@ data class HealthResponse(
     val status: String? = null,
 )
 
-/** 서버 RoutePreviewResponse. 지도 렌더링에 필요한 segments/markers 만 파싱한다. */
+/** 서버 RoutePreviewResponse. segments/markers/viewport/summary 파싱(debug 는 무시). */
 data class RoutePreviewResponse(
+    val summary: SummaryDto? = null,
     val segments: List<SegmentDto> = emptyList(),
     val markers: List<MarkerDto> = emptyList(),
+    val viewport: ViewportDto? = null,
 ) {
     fun toDomain(): RoutePreview = RoutePreview(
         segments = segments.mapNotNull { it.toDomain() },
         markers = markers.mapNotNull { it.toDomain() },
+        viewport = viewport?.toDomain(),
+        summary = summary?.toDomain(),
     )
+}
+
+data class SummaryDto(
+    val total_distance_meters: Int? = null,
+    val total_duration_seconds: Int? = null,
+    val walking_distance_meters: Int? = null,
+    val transit_distance_meters: Int? = null,
+) {
+    fun toDomain(): RouteSummary = RouteSummary(
+        totalDistanceMeters = total_distance_meters ?: 0,
+        totalDurationSeconds = total_duration_seconds ?: 0,
+        walkingDistanceMeters = walking_distance_meters ?: 0,
+        transitDistanceMeters = transit_distance_meters ?: 0,
+    )
+}
+
+data class ViewportDto(
+    val southwest: CoordinateDto? = null,
+    val northeast: CoordinateDto? = null,
+) {
+    fun toDomain(): RouteViewport? {
+        val sw = southwest?.toDomain() ?: return null
+        val ne = northeast?.toDomain() ?: return null
+        return RouteViewport(southwest = sw, northeast = ne)
+    }
 }
 
 data class SegmentDto(
     val kind: String? = null,
     val geometry: List<CoordinateDto> = emptyList(),
     val render: RenderDto? = null,
+    val transit: TransitDto? = null,
 ) {
     fun toDomain(): PreviewSegment? {
         val points = geometry.mapNotNull { it.toDomain() }
@@ -130,8 +163,29 @@ data class SegmentDto(
                 dashed = render?.pattern?.equals("dashed", ignoreCase = true) == true,
                 width = render?.width,
             ),
+            transit = transit?.toDomain(),
         )
     }
+}
+
+data class TransitDto(
+    val mode: String? = null,
+    val route_name: String? = null,
+    val bus_number: String? = null,
+    val subway_line: String? = null,
+    val boarding_stop: String? = null,
+    val alighting_stop: String? = null,
+    val headsign: String? = null,
+) {
+    fun toDomain(): TransitInfo = TransitInfo(
+        mode = mode,
+        routeName = route_name,
+        busNumber = bus_number,
+        subwayLine = subway_line,
+        boardingStop = boarding_stop,
+        alightingStop = alighting_stop,
+        headsign = headsign,
+    )
 }
 
 data class MarkerDto(

@@ -21,6 +21,9 @@ val kakaoNativeAppKey: String = localProperties.getProperty("KAKAO_NATIVE_APP_KE
 // 카카오 REST API 키 (로컬 검색/지오코딩용)
 val kakaoRestApiKey: String = localProperties.getProperty("KAKAO_REST_API_KEY") ?: ""
 
+// (선택) Anthropic API 키 — AI 에이전트 LLM 설명 생성용
+val anthropicApiKey: String = localProperties.getProperty("ANTHROPIC_API_KEY") ?: ""
+
 // 데모 서버 주소. 폰에서 접속 가능한 호스트 IP 를 local.properties 로 덮어쓸 수 있다.
 val serverBaseUrl: String = localProperties.getProperty("SERVER_BASE_URL") ?: "http://172.30.1.66:8000/"
 
@@ -43,6 +46,7 @@ android {
 
         buildConfigField("String", "KAKAO_NATIVE_APP_KEY", "\"$kakaoNativeAppKey\"")
         buildConfigField("String", "KAKAO_REST_API_KEY", "\"$kakaoRestApiKey\"")
+        buildConfigField("String", "ANTHROPIC_API_KEY", "\"$anthropicApiKey\"")
         buildConfigField("String", "SERVER_BASE_URL", "\"$serverBaseUrl\"")
     }
 
