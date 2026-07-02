@@ -22,6 +22,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -40,8 +42,13 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.steptwin.domain.gait.FallRisk
 import com.example.steptwin.domain.gait.SensorSampleType
+import com.example.steptwin.domain.gait.TugMetrics
+import com.example.steptwin.domain.gait.TugPhase
+import com.example.steptwin.domain.gait.TugWeights
 import com.example.steptwin.ui.components.WeightVectorSummary
 
 @Composable
@@ -64,69 +71,279 @@ fun TugMeasureScreen(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Text(
-            text = "3축 센서 기반 보행 검사",
+            text = "3축 센서 기반 TUG 보행 검사",
             style = MaterialTheme.typography.headlineSmall,
         )
-        Text(text = uiState.message)
 
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(
-                enabled = uiState.status != TugMeasureStatus.Recording &&
-                    uiState.status != TugMeasureStatus.Analyzing,
-                onClick = viewModel::startRecording,
-            ) {
-                Text(text = "TUG 테스트 시작")
-            }
-
-            OutlinedButton(
-                enabled = uiState.status != TugMeasureStatus.Recording,
-                onClick = viewModel::reset,
-            ) {
-                Text(text = "초기화")
-            }
-        }
-
-        HorizontalDivider()
-
-        Text(text = "측정 상태: ${statusLabel(uiState.status)}")
-        Text(text = "경과 시간: ${uiState.elapsedSeconds}초 / 15초")
-        Text(text = "수집 샘플: ${uiState.sampleCount}개")
-
-        LiveSensorGraph(
-            accel = uiState.accelWave,
-            gyro = uiState.gyroWave,
-            phases = uiState.phaseWave,
-            currentPhase = uiState.currentPhase,
-            isRecording = uiState.isRecording,
-            hasData = uiState.hasWaveform,
-        )
-
-        uiState.weights?.let { weights ->
-            HorizontalDivider()
-            Text(
-                text = "AI 보행 분석 결과",
-                style = MaterialTheme.typography.titleMedium,
+        when (uiState.status) {
+            TugMeasureStatus.Idle -> IdleIntro(onStart = viewModel::startRecording)
+            TugMeasureStatus.Countdown -> CountdownView(value = uiState.countdownValue)
+            TugMeasureStatus.Recording -> RecordingView(
+                uiState = uiState,
+                onFinish = viewModel::finishRecording,
             )
-            Text(
-                text = "온디바이스 AI가 3축 가속도·자이로 ${uiState.sampleCount}개 표본을 분석해 " +
-                    "보행 속도·회전·근력 취약도를 산출했습니다.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            WeightVectorSummary(weights = weights)
-            aiInsightLines(weights).forEach { line ->
-                Text(text = "• $line", style = MaterialTheme.typography.bodySmall)
-            }
-        }
-
-        uiState.syncMessage?.let { message ->
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "서버 응답: $message",
-                style = MaterialTheme.typography.bodySmall,
+            TugMeasureStatus.Analyzing -> AnalyzingView(message = uiState.message)
+            TugMeasureStatus.Complete -> ResultView(
+                uiState = uiState,
+                onRestart = viewModel::reset,
             )
         }
     }
 }
+
+// ---------------- 상태별 화면 ----------------
+
+@Composable
+private fun IdleIntro(onStart: () -> Unit) {
+    Text(text = "TUG(Timed Up and Go) 검사는 다음 순서로 진행합니다.")
+    Card {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            TugStepText("① 의자에 앉은 상태로 시작")
+            TugStepText("② 일어서기")
+            TugStepText("③ 3m 앞으로 걷기")
+            TugStepText("④ 돌아서기(180° 회전)")
+            TugStepText("⑤ 3m 되돌아오기")
+            TugStepText("⑥ 다시 앉기")
+        }
+    }
+    Text(
+        text = "폰을 몸(주머니·허리)에 지닌 채 앉아서 시작 버튼을 누르고, 안내대로 수행하세요. " +
+            "앉으면 자동으로 종료되고 총 소요 시간과 AI 분석 결과가 표시됩니다.",
+        style = MaterialTheme.typography.bodySmall,
+    )
+    Button(onClick = onStart) {
+        Text(text = "TUG 검사 시작")
+    }
+}
+
+@Composable
+private fun CountdownView(value: Int) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(220.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(text = "준비", style = MaterialTheme.typography.titleMedium)
+            Text(
+                text = if (value > 0) "$value" else "시작!",
+                style = MaterialTheme.typography.displayLarge,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                text = "의자에 앉은 채로 기다리세요.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+    }
+}
+
+@Composable
+private fun RecordingView(
+    uiState: TugMeasureUiState,
+    onFinish: () -> Unit,
+) {
+    Text(text = uiState.message, style = MaterialTheme.typography.bodyMedium)
+
+    // 큰 카운트업 타이머
+    Box(
+        modifier = Modifier.fillMaxWidth(),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                text = "${uiState.elapsedTenths}초",
+                style = MaterialTheme.typography.displayMedium,
+                fontWeight = FontWeight.Bold,
+            )
+            uiState.currentPhase?.let { phase ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(12.dp)
+                            .clip(CircleShape)
+                            .background(phase.color()),
+                    )
+                    Text(
+                        text = "현재 동작: ${phase.label()}",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = phase.color(),
+                    )
+                }
+            }
+        }
+    }
+
+    StepChecklist(
+        standDone = uiState.standDone,
+        walkDone = uiState.walkDone,
+        turnDone = uiState.turnDone,
+    )
+
+    LiveSensorGraph(
+        accel = uiState.accelWave,
+        gyro = uiState.gyroWave,
+        phases = uiState.phaseWave,
+        currentPhase = uiState.currentPhase,
+        isRecording = true,
+        hasData = uiState.hasWaveform,
+    )
+
+    Button(
+        onClick = onFinish,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(text = "완료 (앉았어요)")
+    }
+    Text(
+        text = "수집 샘플 ${uiState.sampleCount}개 · 앉은 자세가 유지되면 자동 종료됩니다.",
+        style = MaterialTheme.typography.bodySmall,
+    )
+}
+
+@Composable
+private fun AnalyzingView(message: String) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(200.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            CircularProgressIndicator()
+            Text(text = message, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
+@Composable
+private fun ResultView(
+    uiState: TugMeasureUiState,
+    onRestart: () -> Unit,
+) {
+    val metrics = uiState.metrics
+    val weights = uiState.weights
+
+    Text(text = uiState.message, style = MaterialTheme.typography.bodyMedium)
+
+    if (metrics != null) {
+        Card {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(text = "TUG 결과", style = MaterialTheme.typography.titleMedium)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.Bottom,
+                ) {
+                    Text(
+                        text = "${"%.1f".format(metrics.tugTimeSec)}초",
+                        style = MaterialTheme.typography.displaySmall,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                        text = "낙상위험 ${metrics.fallRisk.label}",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = metrics.fallRisk.color(),
+                    )
+                }
+                HorizontalDivider()
+                MetricRow("일어서기", "${"%.1f".format(metrics.standSec)}초")
+                MetricRow("보행(왕복)", "${"%.1f".format(metrics.walkSec)}초")
+                MetricRow("회전", "${"%.1f".format(metrics.turnSec)}초")
+                MetricRow("추정 보행속도", "${"%.2f".format(metrics.gaitSpeedMps)} m/s")
+            }
+        }
+    }
+
+    if (weights != null) {
+        HorizontalDivider()
+        Text(text = "AI 보행 분석 결과", style = MaterialTheme.typography.titleMedium)
+        Text(
+            text = "온디바이스 AI가 TUG 구간 지표를 분석해 보행 속도·회전·근력 취약도를 산출했습니다.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        WeightVectorSummary(weights = weights)
+        aiInsightLines(weights).forEach { line ->
+            Text(text = "• $line", style = MaterialTheme.typography.bodySmall)
+        }
+    }
+
+    uiState.syncMessage?.let { message ->
+        Text(
+            text = "서버 응답: $message",
+            style = MaterialTheme.typography.bodySmall,
+        )
+    }
+
+    OutlinedButton(onClick = onRestart) {
+        Text(text = "다시 측정")
+    }
+}
+
+// ---------------- 단계 체크리스트 ----------------
+
+@Composable
+private fun StepChecklist(
+    standDone: Boolean,
+    walkDone: Boolean,
+    turnDone: Boolean,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        StepItem("일어서기", standDone)
+        StepItem("보행 감지", walkDone)
+        StepItem("회전 감지", turnDone)
+        StepItem("복귀·착석", false, pending = true)
+    }
+}
+
+@Composable
+private fun StepItem(label: String, done: Boolean, pending: Boolean = false) {
+    val mark = when {
+        done -> "✅"
+        pending -> "⏳"
+        else -> "⬜"
+    }
+    Text(
+        text = "$mark $label",
+        style = MaterialTheme.typography.bodyMedium,
+        color = if (done) WalkColor else MaterialTheme.colorScheme.onSurface,
+    )
+}
+
+@Composable
+private fun TugStepText(text: String) {
+    Text(text = text, style = MaterialTheme.typography.bodyMedium)
+}
+
+@Composable
+private fun MetricRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(text = label, style = MaterialTheme.typography.bodyMedium)
+        Text(text = value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+    }
+}
+
+// ---------------- 센서 브리지 ----------------
 
 @Composable
 private fun TugSensorBridge(
@@ -152,7 +369,6 @@ private fun TugSensorBridge(
                     } else {
                         SensorSampleType.LinearAcceleration
                     }
-
                     latestOnSample(
                         type,
                         event.timestamp,
@@ -172,26 +388,24 @@ private fun TugSensorBridge(
                 sensorManager.registerListener(listener, it, SensorManager.SENSOR_DELAY_GAME)
             }
 
-            onDispose {
-                sensorManager.unregisterListener(listener)
-            }
+            onDispose { sensorManager.unregisterListener(listener) }
         }
     }
 }
 
-// 정규화 기준. 움직임 세기/회전이 이 값을 넘으면 그래프 상단에 붙는다.
-// (기준선 제거된 '움직임'이라 정지 시 0 근처 → 낮게 잡아 민감하게)
-private const val AccelScale = 8f // m/s^2 (움직임 세기)
-private const val GyroScale = 6f // rad/s (회전 세기)
+// ---------------- 실시간 그래프 ----------------
 
-private val AccelColor = Color(0xFF38BDF8) // 하늘색 = 움직임(가속도)
-private val GyroColor = Color(0xFFFB923C) // 주황색 = 회전(자이로)
+private const val AccelScale = 8f
+private const val GyroScale = 6f
+
+private val AccelColor = Color(0xFF38BDF8)
+private val GyroColor = Color(0xFFFB923C)
 private val GraphBackground = Color(0xFF0B1220)
 private val GraphGrid = Color(0xFF334155)
 
-private val StillColor = Color(0xFF64748B) // 정지/자세전환
-private val WalkColor = Color(0xFF22C55E) // 보행
-private val TurnColor = Color(0xFFF97316) // 회전
+private val StillColor = Color(0xFF64748B)
+private val WalkColor = Color(0xFF22C55E)
+private val TurnColor = Color(0xFFF97316)
 
 private fun TugPhase.color(): Color = when (this) {
     TugPhase.Still -> StillColor
@@ -205,11 +419,13 @@ private fun TugPhase.label(): String = when (this) {
     TugPhase.Turn -> "회전"
 }
 
-/**
- * 실시간 센서 파형 그래프.
- * - 움직임(가속도)과 회전(자이로)을 서로 다른 색 선으로 그린다.
- * - 배경은 자동 분류된 TUG 구간(정지·보행·회전) 색으로 띠를 칠해 구간을 눈으로 구분한다.
- */
+private fun FallRisk.color(): Color = when (this) {
+    FallRisk.Low -> WalkColor
+    FallRisk.Moderate -> TurnColor
+    FallRisk.High -> Color(0xFFDC2626)
+    FallRisk.Unknown -> StillColor
+}
+
 @Composable
 private fun LiveSensorGraph(
     accel: List<Float>,
@@ -224,54 +440,28 @@ private fun LiveSensorGraph(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = if (isRecording) "실시간 센서 파형 (측정 중)" else "센서 파형",
-                style = MaterialTheme.typography.titleSmall,
-            )
-            if (isRecording && currentPhase != null) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(10.dp)
-                            .clip(CircleShape)
-                            .background(currentPhase.color()),
-                    )
-                    Text(
-                        text = "현재: ${currentPhase.label()}",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = currentPhase.color(),
-                    )
-                }
-            }
-        }
+        Text(
+            text = if (isRecording) "실시간 센서 파형 (측정 중)" else "센서 파형",
+            style = MaterialTheme.typography.titleSmall,
+        )
 
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(180.dp)
+                .height(160.dp)
                 .clip(RoundedCornerShape(12.dp))
                 .background(GraphBackground),
             contentAlignment = Alignment.Center,
         ) {
             if (!hasData) {
                 Text(
-                    text = "측정을 시작하면 여기에 실시간 그래프가 표시됩니다.",
+                    text = "측정이 시작되면 실시간 그래프가 표시됩니다.",
                     style = MaterialTheme.typography.bodySmall,
                     color = Color(0xFF94A3B8),
                 )
             } else {
                 Canvas(modifier = Modifier.fillMaxSize()) {
-                    // 1) 구간 색 배경 띠
                     drawPhaseBands(phases)
-                    // 2) 파형 영역은 세로 여백을 주고 그린다.
                     val inset = size.height * 0.08f
                     val plotHeight = size.height - inset * 2f
                     drawLine(
@@ -286,13 +476,9 @@ private fun LiveSensorGraph(
             }
         }
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             LegendItem(color = AccelColor, label = "움직임")
             LegendItem(color = GyroColor, label = "회전")
-            Spacer(modifier = Modifier.size(4.dp))
             LegendItem(color = WalkColor, label = "보행구간")
             LegendItem(color = TurnColor, label = "회전구간")
         }
@@ -315,7 +501,6 @@ private fun LegendItem(color: Color, label: String) {
     }
 }
 
-/** 구간(phase)별로 세로 띠를 칠한다. Still 은 배경과 비슷해 생략(어둡게 유지). */
 private fun DrawScope.drawPhaseBands(phases: List<TugPhase>) {
     if (phases.isEmpty()) return
     val bandWidth = size.width / phases.size
@@ -329,7 +514,6 @@ private fun DrawScope.drawPhaseBands(phases: List<TugPhase>) {
     }
 }
 
-/** 값 리스트를 0~scale 로 정규화해 plot 영역(inset~inset+height) 안에 선을 그린다. */
 private fun DrawScope.drawWave(
     values: List<Float>,
     scale: Float,
@@ -350,25 +534,16 @@ private fun DrawScope.drawWave(
     drawPath(path = path, color = color, style = Stroke(width = 3f))
 }
 
-// 취약도 값(0~1)을 AI 코멘트 문장으로 러프하게 변환한다.
-private fun aiInsightLines(weights: com.example.steptwin.domain.gait.TugWeights): List<String> {
+// 취약도 값을 AI 코멘트로 러프하게 변환.
+private fun aiInsightLines(weights: TugWeights): List<String> {
     fun level(v: Float) = when {
         v >= 0.66f -> "높음"
         v >= 0.33f -> "보통"
         else -> "낮음"
     }
     return listOf(
-        "보행 속도 취약도 ${level(weights.speedWeight)} — 보폭·리듬 특성을 반영해 이동 부담을 추정했습니다.",
-        "회전 취약도 ${level(weights.turnWeight)} — 방향 전환 시 흔들림 정도를 반영했습니다.",
-        "근력 취약도 ${level(weights.strengthWeight)} — 일어서기 국면의 수직 가속을 반영했습니다.",
+        "보행 속도 취약도 ${level(weights.speedWeight)} — 보행속도·TUG 총시간을 반영했습니다.",
+        "회전 취약도 ${level(weights.turnWeight)} — 회전 시간·각속도를 반영했습니다.",
+        "근력 취약도 ${level(weights.strengthWeight)} — 일어서기 시간·수직 가속을 반영했습니다.",
     )
-}
-
-private fun statusLabel(status: TugMeasureStatus): String {
-    return when (status) {
-        TugMeasureStatus.Idle -> "대기"
-        TugMeasureStatus.Recording -> "측정 중"
-        TugMeasureStatus.Analyzing -> "분석 중"
-        TugMeasureStatus.Complete -> "완료"
-    }
 }

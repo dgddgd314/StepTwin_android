@@ -21,15 +21,16 @@ class TugRepositoryImpl @Inject constructor(
     override val latestWeights: StateFlow<TugWeights?> = _latestWeights.asStateFlow()
 
     override suspend fun analyzeAndSync(samples: List<SensorSample>): TugAnalysisResult {
-        val weights = calculator.calculate(samples)
-        _latestWeights.value = weights
+        val analysis = calculator.calculate(samples)
+        _latestWeights.value = analysis.weights
 
         val syncResult = runCatching {
-            remoteDataSource.upload(weights, samples.size)
+            remoteDataSource.upload(analysis.weights, samples.size)
         }
 
         return TugAnalysisResult(
-            weights = weights,
+            weights = analysis.weights,
+            metrics = analysis.metrics,
             syncedToServer = syncResult.isSuccess,
             syncMessage = syncResult.exceptionOrNull()?.message,
         )

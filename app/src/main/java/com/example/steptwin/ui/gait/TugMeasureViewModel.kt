@@ -5,6 +5,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.steptwin.domain.gait.SensorSample
 import com.example.steptwin.domain.gait.SensorSampleType
+import com.example.steptwin.domain.gait.TugMetrics
+import com.example.steptwin.domain.gait.TugPhase
 import com.example.steptwin.domain.gait.TugWeights
 import com.example.steptwin.domain.repository.TugRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -25,64 +27,100 @@ class TugMeasureViewModel @Inject constructor(
 ) : ViewModel() {
     private val sampleBuffer = mutableListOf<SensorSample>()
     private var recordingJob: Job? = null
+    private var stopRequested = false
 
-    // ---- 실시간 그래프/구간 분류용 상태 (모두 메인 스레드에서만 접근) ----
-    // 틱 사이에 들어온 센서 표본을 누적했다가 틱마다 평균을 낸다(센서마다 표본율이 달라 시간정렬을 위해).
+    // ---- 실시간 그래프/구간 분류 상태 (메인 스레드 전용) ----
     private var accelSum = 0f
     private var accelCount = 0
     private var gyroSum = 0f
     private var gyroCount = 0
     private var lastAccelMag = 0f
     private var lastGyroMag = 0f
-
-    // 중력/기기 방향 성분을 제거하기 위한 느린 기준선(선형가속도든 가속도계든 정지=0 으로 보이게).
     private var accelBaseline = 0f
     private var accelBaselineReady = false
-    // 구간 분류 안정화를 위한 지수이동평균.
     private var dynAccelEma = 0f
     private var gyroEma = 0f
 
-    // 틱 단위(시간정렬)로 쌓는 그래프 시계열.
-    private val moveSeries = ArrayDeque<Float>() // 움직임 세기(기준선 제거 가속도)
-    private val gyroSeries = ArrayDeque<Float>() // 회전 세기(자이로 크기)
+    private val moveSeries = ArrayDeque<Float>()
+    private val gyroSeries = ArrayDeque<Float>()
     private val phaseSeries = ArrayDeque<TugPhase>()
+
+    // ---- TUG 단계 진행 추적 ----
+    private var standDone = false
+    private var walkDone = false
+    private var turnDone = false
+    private var stillTicks = 0
 
     private val _uiState = MutableStateFlow(TugMeasureUiState())
     val uiState: StateFlow<TugMeasureUiState> = _uiState.asStateFlow()
 
     fun startRecording() {
-        if (_uiState.value.status == TugMeasureStatus.Recording) return
+        if (_uiState.value.status == TugMeasureStatus.Recording ||
+            _uiState.value.status == TugMeasureStatus.Countdown
+        ) {
+            return
+        }
 
         recordingJob?.cancel()
         sampleBuffer.clear()
         resetSignalState()
-        _uiState.value = TugMeasureUiState(
-            status = TugMeasureStatus.Recording,
-            message = "측정 중입니다. 의자에서 일어나 3m를 걷고 돌아와 앉아주세요.",
-        )
+        resetSteps()
+        stopRequested = false
 
         recordingJob = viewModelScope.launch {
-            val startedAtMillis = SystemClock.elapsedRealtime()
+            // 준비 카운트다운 (앉은 자세로 폰을 몸에 지니고 대기)
+            for (v in CountdownFrom downTo 1) {
+                _uiState.value = TugMeasureUiState(
+                    status = TugMeasureStatus.Countdown,
+                    countdownValue = v,
+                    message = "준비하세요. 의자에 앉은 채로 시작합니다.",
+                )
+                delay(CountdownStepMillis)
+            }
+
+            // 측정 시작(카운트업). 여기서부터 센서 수집.
+            resetSignalState()
+            _uiState.value = TugMeasureUiState(
+                status = TugMeasureStatus.Recording,
+                message = "일어나 3m 걷고 돌아와 앉으세요. 앉으면 자동으로 종료됩니다.",
+            )
+            val startedAt = SystemClock.elapsedRealtime()
 
             while (true) {
-                val elapsedMillis = SystemClock.elapsedRealtime() - startedAtMillis
+                val elapsed = SystemClock.elapsedRealtime() - startedAt
                 sampleTick()
+                val phase = phaseSeries.lastOrNull()
+                updateSteps(phase)
+
                 _uiState.update {
                     it.copy(
-                        elapsedMillis = elapsedMillis.coerceAtMost(MeasurementDurationMillis),
+                        elapsedMillis = elapsed,
                         sampleCount = sampleBuffer.size,
                         accelWave = moveSeries.toList(),
                         gyroWave = gyroSeries.toList(),
                         phaseWave = phaseSeries.toList(),
-                        currentPhase = phaseSeries.lastOrNull(),
+                        currentPhase = phase,
+                        standDone = standDone,
+                        walkDone = walkDone,
+                        turnDone = turnDone,
                     )
                 }
 
-                if (elapsedMillis >= MeasurementDurationMillis) break
+                val autoStop = walkDone && turnDone &&
+                    elapsed >= MinDurationMillis &&
+                    stillTicks >= AutoStopStillTicks
+                if (stopRequested || autoStop || elapsed >= MaxDurationMillis) break
                 delay(WaveTickMillis)
             }
 
             completeRecording()
+        }
+    }
+
+    /** 사용자가 "완료(앉았어요)"를 눌렀을 때. */
+    fun finishRecording() {
+        if (_uiState.value.status == TugMeasureStatus.Recording) {
+            stopRequested = true
         }
     }
 
@@ -95,15 +133,8 @@ class TugMeasureViewModel @Inject constructor(
     ) {
         if (_uiState.value.status != TugMeasureStatus.Recording) return
 
-        sampleBuffer += SensorSample(
-            type = type,
-            timestampNanos = timestampNanos,
-            x = x,
-            y = y,
-            z = z,
-        )
+        sampleBuffer += SensorSample(type, timestampNanos, x, y, z)
 
-        // 다음 틱까지 센서 크기를 누적한다.
         val magnitude = sqrt(x * x + y * y + z * z)
         if (type == SensorSampleType.Gyroscope) {
             gyroSum += magnitude
@@ -116,14 +147,12 @@ class TugMeasureViewModel @Inject constructor(
         }
     }
 
-    /** 틱마다 누적값을 평균 내어 움직임 세기/회전 세기/구간을 계산해 시계열에 추가한다. */
     private fun sampleTick() {
         val accelMag = if (accelCount > 0) accelSum / accelCount else lastAccelMag
         val gyroMag = if (gyroCount > 0) gyroSum / gyroCount else lastGyroMag
         accelSum = 0f; accelCount = 0
         gyroSum = 0f; gyroCount = 0
 
-        // 느린 기준선 추적 후 제거 → 정지 상태는 0 근처, 움직임만 남는다.
         if (!accelBaselineReady) {
             accelBaseline = accelMag
             accelBaselineReady = true
@@ -131,7 +160,6 @@ class TugMeasureViewModel @Inject constructor(
             accelBaseline = accelBaseline * (1f - BaselineAlpha) + accelMag * BaselineAlpha
         }
         val movement = abs(accelMag - accelBaseline)
-
         dynAccelEma = dynAccelEma * (1f - SmoothAlpha) + movement * SmoothAlpha
         gyroEma = gyroEma * (1f - SmoothAlpha) + gyroMag * SmoothAlpha
 
@@ -144,9 +172,15 @@ class TugMeasureViewModel @Inject constructor(
         moveSeries.addLast(movement)
         gyroSeries.addLast(gyroMag)
         phaseSeries.addLast(phase)
-        trim(moveSeries)
-        trim(gyroSeries)
-        trim(phaseSeries)
+        trim(moveSeries); trim(gyroSeries); trim(phaseSeries)
+    }
+
+    private fun updateSteps(phase: TugPhase?) {
+        if (dynAccelEma > OnsetThreshold) standDone = true
+        if (phase == TugPhase.Walk) walkDone = true
+        if (phase == TugPhase.Turn && walkDone) turnDone = true
+        // 일어선 뒤 다시 정지가 지속되면 = 앉았다고 보고 자동 종료 카운트
+        stillTicks = if (phase == TugPhase.Still && standDone) stillTicks + 1 else 0
     }
 
     private fun <T> trim(deque: ArrayDeque<T>) {
@@ -159,15 +193,19 @@ class TugMeasureViewModel @Inject constructor(
         lastAccelMag = 0f; lastGyroMag = 0f
         accelBaseline = 0f; accelBaselineReady = false
         dynAccelEma = 0f; gyroEma = 0f
-        moveSeries.clear()
-        gyroSeries.clear()
-        phaseSeries.clear()
+        moveSeries.clear(); gyroSeries.clear(); phaseSeries.clear()
+    }
+
+    private fun resetSteps() {
+        standDone = false; walkDone = false; turnDone = false; stillTicks = 0
     }
 
     fun reset() {
         recordingJob?.cancel()
+        stopRequested = false
         sampleBuffer.clear()
         resetSignalState()
+        resetSteps()
         _uiState.value = TugMeasureUiState()
     }
 
@@ -176,9 +214,7 @@ class TugMeasureViewModel @Inject constructor(
         _uiState.update {
             it.copy(
                 status = TugMeasureStatus.Analyzing,
-                elapsedMillis = MeasurementDurationMillis,
-                sampleCount = samples.size,
-                message = "AI가 보행 특성을 분석하고 있습니다.",
+                message = "AI가 TUG 구간을 분석하고 있습니다.",
                 currentPhase = null,
             )
         }
@@ -188,6 +224,7 @@ class TugMeasureViewModel @Inject constructor(
             it.copy(
                 status = TugMeasureStatus.Complete,
                 weights = result.weights,
+                metrics = result.metrics,
                 message = if (result.syncedToServer) {
                     "측정 완료. 서버 동기화까지 완료했습니다."
                 } else {
@@ -200,53 +237,50 @@ class TugMeasureViewModel @Inject constructor(
     }
 
     companion object {
-        const val MeasurementDurationMillis = 15_000L
-
-        /** 그래프에 표시할 최근 틱 수(가로축 길이). 60ms * 160 ≈ 9.6초 창. */
         const val WaveWindowSize = 160
-
-        /** 그래프/타이머 갱신 주기(ms). 약 16fps. */
         const val WaveTickMillis = 60L
 
-        // 구간 분류 파라미터 (선형가속도 m/s^2, 자이로 rad/s 기준).
-        private const val BaselineAlpha = 0.03f // 기준선 추적 속도(느리게)
-        private const val SmoothAlpha = 0.4f // 분류 안정화용 EMA
-        private const val TurnGyroThreshold = 1.0f // 이보다 회전 크면 '회전'
-        private const val WalkAccelThreshold = 1.2f // 이보다 움직임 크면 '보행'
+        private const val CountdownFrom = 3
+        private const val CountdownStepMillis = 800L
+        private const val MinDurationMillis = 4_000L // 자동 종료 최소 경과
+        private const val MaxDurationMillis = 40_000L // 안전 상한
+        private const val AutoStopStillTicks = 25 // 약 1.5초 정지 지속
+
+        private const val BaselineAlpha = 0.03f
+        private const val SmoothAlpha = 0.4f
+        private const val TurnGyroThreshold = 1.0f
+        private const val WalkAccelThreshold = 1.2f
+        private const val OnsetThreshold = 0.6f
     }
 }
 
 data class TugMeasureUiState(
     val status: TugMeasureStatus = TugMeasureStatus.Idle,
+    val countdownValue: Int = 0,
     val elapsedMillis: Long = 0L,
     val sampleCount: Int = 0,
     val weights: TugWeights? = null,
-    val message: String = "TUG 기반 보행 검사를 시작하세요.",
+    val metrics: TugMetrics? = null,
+    val message: String = "TUG 검사를 시작하세요.",
     val syncMessage: String? = null,
-    /** 실시간 움직임 세기(기준선 제거 가속도) 파형. */
     val accelWave: List<Float> = emptyList(),
-    /** 실시간 회전(자이로) 세기 파형. */
     val gyroWave: List<Float> = emptyList(),
-    /** 각 표본 시점의 자동 분류 구간(그래프 배경 색 구분용). */
     val phaseWave: List<TugPhase> = emptyList(),
-    /** 측정 중 현재 구간. */
     val currentPhase: TugPhase? = null,
+    val standDone: Boolean = false,
+    val walkDone: Boolean = false,
+    val turnDone: Boolean = false,
 ) {
     val isRecording: Boolean = status == TugMeasureStatus.Recording
     val elapsedSeconds: Int = (elapsedMillis / 1_000L).toInt()
+    val elapsedTenths: String = "%.1f".format(elapsedMillis / 1_000.0)
     val hasWaveform: Boolean = accelWave.isNotEmpty() || gyroWave.isNotEmpty()
 }
 
 enum class TugMeasureStatus {
     Idle,
+    Countdown,
     Recording,
     Analyzing,
     Complete,
-}
-
-/** TUG 동작 구간 자동 분류 결과. */
-enum class TugPhase {
-    Still, // 정지 / 자세 전환(앉기·일어서기)
-    Walk, // 보행
-    Turn, // 회전
 }

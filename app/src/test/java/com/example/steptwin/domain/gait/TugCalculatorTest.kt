@@ -10,6 +10,6 @@ class TugCalculatorTest {
     fun emptySamplesReturnNeutralWeights() {
         val result = calculator.calculate(emptyList())
 
-        assertEquals(TugWeights.neutral(), result)
+        assertEquals(TugWeights.neutral(), result.weights)
     }
 }
