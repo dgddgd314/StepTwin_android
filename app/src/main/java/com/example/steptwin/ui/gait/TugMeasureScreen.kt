@@ -104,10 +104,18 @@ fun TugMeasureScreen(
         uiState.weights?.let { weights ->
             HorizontalDivider()
             Text(
-                text = "산출된 취약도 벡터",
+                text = "AI 보행 분석 결과",
                 style = MaterialTheme.typography.titleMedium,
             )
+            Text(
+                text = "온디바이스 AI가 3축 가속도·자이로 ${uiState.sampleCount}개 표본을 분석해 " +
+                    "보행 속도·회전·근력 취약도를 산출했습니다.",
+                style = MaterialTheme.typography.bodySmall,
+            )
             WeightVectorSummary(weights = weights)
+            aiInsightLines(weights).forEach { line ->
+                Text(text = "• $line", style = MaterialTheme.typography.bodySmall)
+            }
         }
 
         uiState.syncMessage?.let { message ->
@@ -340,6 +348,20 @@ private fun DrawScope.drawWave(
         if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
     }
     drawPath(path = path, color = color, style = Stroke(width = 3f))
+}
+
+// 취약도 값(0~1)을 AI 코멘트 문장으로 러프하게 변환한다.
+private fun aiInsightLines(weights: com.example.steptwin.domain.gait.TugWeights): List<String> {
+    fun level(v: Float) = when {
+        v >= 0.66f -> "높음"
+        v >= 0.33f -> "보통"
+        else -> "낮음"
+    }
+    return listOf(
+        "보행 속도 취약도 ${level(weights.speedWeight)} — 보폭·리듬 특성을 반영해 이동 부담을 추정했습니다.",
+        "회전 취약도 ${level(weights.turnWeight)} — 방향 전환 시 흔들림 정도를 반영했습니다.",
+        "근력 취약도 ${level(weights.strengthWeight)} — 일어서기 국면의 수직 가속을 반영했습니다.",
+    )
 }
 
 private fun statusLabel(status: TugMeasureStatus): String {

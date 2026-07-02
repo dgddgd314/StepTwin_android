@@ -178,7 +178,7 @@ class TugMeasureViewModel @Inject constructor(
                 status = TugMeasureStatus.Analyzing,
                 elapsedMillis = MeasurementDurationMillis,
                 sampleCount = samples.size,
-                message = "보행 특성을 계산하고 있습니다.",
+                message = "AI가 보행 특성을 분석하고 있습니다.",
                 currentPhase = null,
             )
         }
