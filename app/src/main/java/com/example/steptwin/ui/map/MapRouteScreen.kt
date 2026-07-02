@@ -63,6 +63,14 @@ fun MapRouteScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
+
+    // 카카오 지도 네이티브 라이브러리가 없는 기기(x86_64 에뮬레이터 등)에서는
+    // MapView 를 만들면 크래시하므로 안내만 보여준다.
+    if (!MapSupport.available) {
+        MapUnsupportedNotice(modifier = modifier)
+        return
+    }
+
     val lifecycleOwner = remember(context) { context.findLifecycleOwner() }
 
     val kakaoMapState = remember { mutableStateOf<KakaoMap?>(null) }
@@ -130,6 +138,37 @@ fun MapRouteScreen(
                 .fillMaxWidth()
                 .padding(12.dp),
         )
+    }
+}
+
+@Composable
+private fun MapUnsupportedNotice(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Card {
+            Column(
+                modifier = Modifier.padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(
+                    text = "이 기기에서는 지도를 표시할 수 없어요",
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    text = "카카오 지도 SDK 는 ARM(arm64) 기기용 라이브러리만 제공합니다. " +
+                        "지금은 x86/x86_64 에뮬레이터로 보입니다.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    text = "실제 안드로이드 폰(대부분 arm64)에서 실행하면 지도가 정상적으로 표시됩니다.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
     }
 }
 
