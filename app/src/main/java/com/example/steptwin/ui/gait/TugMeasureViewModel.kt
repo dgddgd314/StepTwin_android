@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlin.math.sqrt
 import javax.inject.Inject
 
 @HiltViewModel
@@ -24,6 +25,10 @@ class TugMeasureViewModel @Inject constructor(
     private val sampleBuffer = mutableListOf<SensorSample>()
     private var recordingJob: Job? = null
 
+    // 실시간 그래프용 롤링 윈도우(최근 크기값). 센서 콜백/타이머 모두 메인 스레드라 별도 동기화 불필요.
+    private val accelWindow = ArrayDeque<Float>()
+    private val gyroWindow = ArrayDeque<Float>()
+
     private val _uiState = MutableStateFlow(TugMeasureUiState())
     val uiState: StateFlow<TugMeasureUiState> = _uiState.asStateFlow()
 
@@ -32,6 +37,8 @@ class TugMeasureViewModel @Inject constructor(
 
         recordingJob?.cancel()
         sampleBuffer.clear()
+        accelWindow.clear()
+        gyroWindow.clear()
         _uiState.value = TugMeasureUiState(
             status = TugMeasureStatus.Recording,
             message = "측정 중입니다. 의자에서 일어나 3m를 걷고 돌아와 앉아주세요.",
@@ -46,11 +53,13 @@ class TugMeasureViewModel @Inject constructor(
                     it.copy(
                         elapsedMillis = elapsedMillis.coerceAtMost(MeasurementDurationMillis),
                         sampleCount = sampleBuffer.size,
+                        accelWave = accelWindow.toList(),
+                        gyroWave = gyroWindow.toList(),
                     )
                 }
 
                 if (elapsedMillis >= MeasurementDurationMillis) break
-                delay(250)
+                delay(WaveTickMillis)
             }
 
             completeRecording()
@@ -74,14 +83,18 @@ class TugMeasureViewModel @Inject constructor(
             z = z,
         )
 
-        if (sampleBuffer.size % 20 == 0) {
-            _uiState.update { it.copy(sampleCount = sampleBuffer.size) }
-        }
+        // 실시간 그래프용: 3축 벡터 크기를 롤링 윈도우에 적재. 상태 갱신은 타이머 루프가 담당(과도한 recomposition 방지).
+        val magnitude = sqrt(x * x + y * y + z * z)
+        val window = if (type == SensorSampleType.Gyroscope) gyroWindow else accelWindow
+        window.addLast(magnitude)
+        while (window.size > WaveWindowSize) window.removeFirst()
     }
 
     fun reset() {
         recordingJob?.cancel()
         sampleBuffer.clear()
+        accelWindow.clear()
+        gyroWindow.clear()
         _uiState.value = TugMeasureUiState()
     }
 
@@ -113,6 +126,12 @@ class TugMeasureViewModel @Inject constructor(
 
     companion object {
         const val MeasurementDurationMillis = 15_000L
+
+        /** 그래프에 표시할 최근 표본 수(가로축 길이). */
+        const val WaveWindowSize = 160
+
+        /** 그래프/타이머 갱신 주기(ms). 약 16fps. */
+        const val WaveTickMillis = 60L
     }
 }
 
@@ -123,9 +142,14 @@ data class TugMeasureUiState(
     val weights: TugWeights? = null,
     val message: String = "TUG 기반 보행 검사를 시작하세요.",
     val syncMessage: String? = null,
+    /** 실시간 가속도 크기 파형(최근 표본). */
+    val accelWave: List<Float> = emptyList(),
+    /** 실시간 자이로(회전) 크기 파형(최근 표본). */
+    val gyroWave: List<Float> = emptyList(),
 ) {
     val isRecording: Boolean = status == TugMeasureStatus.Recording
     val elapsedSeconds: Int = (elapsedMillis / 1_000L).toInt()
+    val hasWaveform: Boolean = accelWave.isNotEmpty() || gyroWave.isNotEmpty()
 }
 
 enum class TugMeasureStatus {
