@@ -23,6 +23,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -41,29 +42,32 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import com.example.steptwin.R
-import com.example.steptwin.domain.agent.AgentReport
 import com.example.steptwin.domain.preview.GeoPoint
 import com.example.steptwin.domain.preview.PlaceSuggestion
-import com.example.steptwin.domain.preview.WalkRoute
+import com.example.steptwin.domain.preview.PreviewMarker
+import com.example.steptwin.domain.preview.PreviewSegment
+import com.example.steptwin.domain.preview.RoutePreview
+import com.example.steptwin.domain.preview.SegmentKind
 import com.kakao.vectormap.KakaoMap
 import com.kakao.vectormap.KakaoMapReadyCallback
 import com.kakao.vectormap.LatLng
 import com.kakao.vectormap.MapLifeCycleCallback
 import com.kakao.vectormap.MapView
 import com.kakao.vectormap.camera.CameraUpdateFactory
+import com.kakao.vectormap.label.LabelLayer
+import com.kakao.vectormap.label.LabelManager
 import com.kakao.vectormap.label.LabelOptions
 import com.kakao.vectormap.label.LabelStyle
 import com.kakao.vectormap.label.LabelStyles
 import com.kakao.vectormap.route.RouteLineOptions
+import com.kakao.vectormap.route.RouteLinePattern
 import com.kakao.vectormap.route.RouteLineSegment
 import com.kakao.vectormap.route.RouteLineStyle
 import com.kakao.vectormap.route.RouteLineStyles
 import com.kakao.vectormap.route.RouteLineStylesSet
 
-private val DemoCenter = LatLng.from(37.5916, 127.0547)
-private const val DemoZoom = 15
-private const val RouteColorHex = "#16A34A"
-private const val RouteWidth = 6f
+private val DemoCenter = LatLng.from(37.5722, 127.0146)
+private const val DemoZoom = 12
 
 @Composable
 fun MapRouteScreen(
@@ -120,27 +124,62 @@ fun MapRouteScreen(
         }
     }
 
-    // 지도 준비 + 상태 변경 시 다시 그린다(경로 없음이어도 마커는 갱신).
-    LaunchedEffect(kakaoMapState.value, uiState.route, uiState.resolvedStart, uiState.resolvedEnd) {
+    // 지도 준비 + 경로/마커 변경 시 다시 그린다(패널 닫혀도 경로 유지).
+    LaunchedEffect(kakaoMapState.value, uiState.preview, uiState.resolvedStart, uiState.resolvedEnd) {
         val map = kakaoMapState.value ?: return@LaunchedEffect
-        drawWalkRoute(map, uiState.route, uiState.resolvedStart, uiState.resolvedEnd, context)
+        drawPreview(map, uiState.preview, uiState.resolvedStart, uiState.resolvedEnd, context)
     }
 
     Box(modifier = modifier.fillMaxSize()) {
         AndroidView(factory = { mapView }, modifier = Modifier.fillMaxSize())
-        SearchPanel(
-            uiState = uiState,
-            onStartChange = viewModel::updateStartQuery,
-            onEndChange = viewModel::updateEndQuery,
-            onSelectStart = viewModel::selectStart,
-            onSelectEnd = viewModel::selectEnd,
-            onSearch = viewModel::search,
-            onRunAgent = viewModel::runAgent,
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .fillMaxWidth()
-                .padding(12.dp),
-        )
+
+        // 상단: 패널 열림이면 검색 패널, 닫힘이면 '길찾기' 열기 버튼
+        val topModifier = Modifier
+            .align(Alignment.TopCenter)
+            .fillMaxWidth()
+            .padding(12.dp)
+        when (uiState.panelState) {
+            RoutePanelState.Open -> SearchPanel(
+                uiState = uiState,
+                onStartChange = viewModel::updateStartQuery,
+                onEndChange = viewModel::updateEndQuery,
+                onSelectStart = viewModel::selectStart,
+                onSelectEnd = viewModel::selectEnd,
+                onSearch = viewModel::search,
+                onClose = viewModel::closePanel,
+                modifier = topModifier,
+            )
+            RoutePanelState.Closed ->
+                if (uiState.navState != NavigationState.NavigatingPlaceholder) {
+                    Button(
+                        onClick = viewModel::openPanel,
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(16.dp),
+                    ) {
+                        Text(text = "길찾기")
+                    }
+                }
+        }
+
+        // 하단: 경로 미리보기 바 / 길안내 모드 바
+        val bottomModifier = Modifier
+            .align(Alignment.BottomCenter)
+            .fillMaxWidth()
+            .padding(12.dp)
+        when (uiState.navState) {
+            NavigationState.RoutePreviewShown -> RoutePreviewBar(
+                uiState = uiState,
+                onStartNavigation = viewModel::startNavigation,
+                onEditRoute = viewModel::openPanel,
+                modifier = bottomModifier,
+            )
+            NavigationState.NavigatingPlaceholder -> NavigatingBar(
+                onStop = viewModel::stopNavigation,
+                modifier = bottomModifier,
+            )
+            NavigationState.Idle -> Unit
+        }
     }
 }
 
@@ -175,6 +214,8 @@ private fun MapUnsupportedNotice(modifier: Modifier = Modifier) {
     }
 }
 
+// ---------------- 상단 검색 패널 ----------------
+
 @Composable
 private fun SearchPanel(
     uiState: MapRouteUiState,
@@ -183,7 +224,7 @@ private fun SearchPanel(
     onSelectStart: (PlaceSuggestion) -> Unit,
     onSelectEnd: (PlaceSuggestion) -> Unit,
     onSearch: () -> Unit,
-    onRunAgent: () -> Unit,
+    onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Card(modifier = modifier) {
@@ -193,7 +234,14 @@ private fun SearchPanel(
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Text(text = "맞춤 길찾기", style = MaterialTheme.typography.titleMedium)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(text = "길찾기", style = MaterialTheme.typography.titleMedium)
+                TextButton(onClick = onClose) { Text(text = "닫기") }
+            }
 
             OutlinedTextField(
                 value = uiState.startQuery,
@@ -226,27 +274,9 @@ private fun SearchPanel(
                 Button(onClick = onSearch, enabled = !uiState.isLoading) {
                     Text(text = "길찾기")
                 }
-                Button(
-                    onClick = onRunAgent,
-                    enabled = !uiState.isLoading && !uiState.isAgentRunning,
-                ) {
-                    Text(text = "🤖 AI 에이전트")
-                }
-                if (uiState.isLoading || uiState.isAgentRunning) {
+                if (uiState.isLoading) {
                     CircularProgressIndicator(modifier = Modifier.padding(4.dp))
                 }
-            }
-
-            uiState.agentReport?.let { AgentReportCard(it) }
-
-            val route = uiState.route
-            if (route?.metrics != null) {
-                val m = route.metrics
-                Text(
-                    text = "거리 ${m.distanceMeters}m · 시간 ${m.durationSeconds / 60}분 " +
-                        "${m.durationSeconds % 60}초 · 계단 ${m.stairsCount} · 그늘막 ${m.shadeShelters}",
-                    style = MaterialTheme.typography.bodySmall,
-                )
             }
 
             uiState.statusMessage?.let { message ->
@@ -296,38 +326,65 @@ private fun SuggestionList(
     }
 }
 
+// ---------------- 하단 바 ----------------
+
 @Composable
-private fun AgentReportCard(report: AgentReport) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.secondaryContainer)
-            .padding(10.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        Text(
-            text = "🤖 AI 에이전트 워크플로우 · ${if (report.llmBacked) "LLM" else "규칙기반"}",
-            style = MaterialTheme.typography.labelLarge,
-        )
-        report.steps.forEachIndexed { index, step ->
+private fun RoutePreviewBar(
+    uiState: MapRouteUiState,
+    onStartNavigation: () -> Unit,
+    onEditRoute: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val preview = uiState.preview ?: return
+    Card(modifier = modifier) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
             Text(
-                text = "${index + 1}. ${step.tool} → ${step.observation}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                text = "경로 준비 완료 · ${preview.segments.size}개 구간, ${preview.markers.size}개 지점",
+                style = MaterialTheme.typography.bodyMedium,
             )
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Button(onClick = onStartNavigation, enabled = uiState.canNavigate) {
+                    Text(text = "길안내 시작")
+                }
+                TextButton(onClick = onEditRoute) { Text(text = "경로 수정") }
+            }
         }
-        Text(
-            text = report.advice,
-            style = MaterialTheme.typography.bodyMedium,
-        )
     }
 }
 
-/** WalkRoute geometry 를 초록 실선 polyline 으로, 출발/도착을 마커로 그린다. */
-private fun drawWalkRoute(
+@Composable
+private fun NavigatingBar(
+    onStop: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Card(modifier = modifier) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(text = "길안내 모드", style = MaterialTheme.typography.titleMedium)
+            Text(
+                text = "경로를 따라 이동하세요. 상세 턴바이턴 안내는 준비 중입니다.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Button(onClick = onStop) { Text(text = "길안내 종료") }
+        }
+    }
+}
+
+// ---------------- 렌더링 ----------------
+
+/** segments 를 각각 별도 polyline(색/굵기/패턴)으로, markers 를 icon 별로 그린다. */
+private fun drawPreview(
     map: KakaoMap,
-    route: WalkRoute?,
+    preview: RoutePreview?,
     resolvedStart: GeoPoint?,
     resolvedEnd: GeoPoint?,
     context: Context,
@@ -339,43 +396,78 @@ private fun drawWalkRoute(
     routeLayer?.removeAll()
     labelLayer?.removeAll()
 
-    // 출발/도착 마커 (경로 없어도 표시). 스냅 좌표 우선, 없으면 지오코딩 좌표.
-    val startPt = route?.start ?: resolvedStart
-    val endPt = route?.end ?: resolvedEnd
+    // 마커: 응답 markers 우선, 없으면 출발/도착 좌표
     if (labelManager != null && labelLayer != null) {
-        startPt?.let {
-            addMarker(labelManager, labelLayer, it, context.rasterize(R.drawable.ic_marker_origin))
-        }
-        endPt?.let {
-            addMarker(labelManager, labelLayer, it, context.rasterize(R.drawable.ic_marker_destination))
+        if (preview != null && preview.markers.isNotEmpty()) {
+            preview.markers.forEach { marker ->
+                addMarker(labelManager, labelLayer, marker.coordinate, context.rasterize(marker.iconRes()))
+            }
+        } else {
+            resolvedStart?.let {
+                addMarker(labelManager, labelLayer, it, context.rasterize(R.drawable.ic_marker_origin))
+            }
+            resolvedEnd?.let {
+                addMarker(labelManager, labelLayer, it, context.rasterize(R.drawable.ic_marker_destination))
+            }
         }
     }
 
-    // 경로 polyline (초록 실선, 폭 6)
-    val geometry = route?.geometry.orEmpty()
-    if (routeLayer != null && geometry.size >= 2) {
-        val points = geometry.map { LatLng.from(it.latitude, it.longitude) }
-        val style = RouteLineStyle.from(RouteWidth, AndroidColor.parseColor(RouteColorHex))
-        val stylesSet = RouteLineStylesSet.from(RouteLineStyles.from(style))
-        val segment = RouteLineSegment.from(points, stylesSet.getStyles(0))
-        routeLayer.addRouteLine(RouteLineOptions.from(segment).setStylesSet(stylesSet))
+    // 세그먼트: 각각 개별 polyline
+    if (routeLayer != null && preview != null) {
+        preview.segments.forEach { segment ->
+            val points = segment.geometry.map { LatLng.from(it.latitude, it.longitude) }
+            if (points.size < 2) return@forEach
+            val style = RouteLineStyle.from(segment.lineWidth(), segment.lineColor()).let { base ->
+                if (segment.style.dashed) {
+                    base.setPattern(
+                        RouteLinePattern.from(context.rasterize(R.drawable.route_dash_pattern), 24f),
+                    )
+                } else {
+                    base
+                }
+            }
+            val stylesSet = RouteLineStylesSet.from(RouteLineStyles.from(style))
+            val lineSegment = RouteLineSegment.from(points, stylesSet.getStyles(0))
+            routeLayer.addRouteLine(RouteLineOptions.from(lineSegment).setStylesSet(stylesSet))
+        }
     }
 
-    // 카메라: 경로가 있으면 경로 전체, 없으면 출발/도착만 담는다.
-    val camPoints = when {
-        geometry.size >= 2 -> geometry.map { LatLng.from(it.latitude, it.longitude) }
-        startPt != null && endPt != null ->
-            listOf(startPt, endPt).map { LatLng.from(it.latitude, it.longitude) }
-        else -> emptyList()
+    moveCamera(map, preview, resolvedStart, resolvedEnd)
+}
+
+private fun moveCamera(
+    map: KakaoMap,
+    preview: RoutePreview?,
+    resolvedStart: GeoPoint?,
+    resolvedEnd: GeoPoint?,
+) {
+    // 1) 응답 viewport 우선
+    preview?.viewport?.let { vp ->
+        val pts = arrayOf(
+            LatLng.from(vp.southwest.latitude, vp.southwest.longitude),
+            LatLng.from(vp.northeast.latitude, vp.northeast.longitude),
+        )
+        map.moveCamera(CameraUpdateFactory.fitMapPoints(pts, 120))
+        return
     }
-    if (camPoints.size >= 2) {
-        map.moveCamera(CameraUpdateFactory.fitMapPoints(camPoints.toTypedArray(), 120))
+    // 2) 모든 세그먼트 좌표 bounds
+    val segPoints = preview?.segments?.flatMap { it.geometry }
+        ?.map { LatLng.from(it.latitude, it.longitude) }
+        .orEmpty()
+    if (segPoints.size >= 2) {
+        map.moveCamera(CameraUpdateFactory.fitMapPoints(segPoints.toTypedArray(), 120))
+        return
+    }
+    // 3) 출발/도착만
+    val ends = listOfNotNull(resolvedStart, resolvedEnd).map { LatLng.from(it.latitude, it.longitude) }
+    if (ends.size >= 2) {
+        map.moveCamera(CameraUpdateFactory.fitMapPoints(ends.toTypedArray(), 120))
     }
 }
 
 private fun addMarker(
-    labelManager: com.kakao.vectormap.label.LabelManager,
-    labelLayer: com.kakao.vectormap.label.LabelLayer,
+    labelManager: LabelManager,
+    labelLayer: LabelLayer,
     point: GeoPoint,
     icon: Bitmap,
 ) {
@@ -385,7 +477,38 @@ private fun addMarker(
     )
 }
 
-/** 드로어블(벡터 포함)을 비트맵으로 래스터화(카카오 마커는 비트맵 필요). */
+private fun PreviewSegment.lineColor(): Int {
+    style.colorHex?.let { hex ->
+        runCatching { AndroidColor.parseColor(hex) }.getOrNull()?.let { return it }
+    }
+    return when (kind) {
+        SegmentKind.TRANSIT -> AndroidColor.parseColor("#0052A4")
+        SegmentKind.CUSTOM_WALK -> AndroidColor.parseColor("#16A34A")
+        SegmentKind.UNKNOWN -> AndroidColor.parseColor("#6B7280")
+    }
+}
+
+private fun PreviewSegment.lineWidth(): Float {
+    style.width?.let { return it.toFloat() }
+    return when (kind) {
+        SegmentKind.TRANSIT -> 8f
+        else -> 6f
+    }
+}
+
+private fun PreviewMarker.iconRes(): Int {
+    when (icon?.lowercase()) {
+        "origin", "start" -> return R.drawable.ic_marker_origin
+        "destination", "goal" -> return R.drawable.ic_marker_destination
+        "transit-stop", "stop", "bus", "subway" -> return R.drawable.ic_marker_stop
+        "parasol", "shade" -> return R.drawable.ic_marker_parasol
+        "tree" -> return R.drawable.ic_marker_parasol
+        "stairs-off", "stairs", "stairs_avoided" -> return R.drawable.ic_marker_stairs
+    }
+    return R.drawable.ic_marker_default
+}
+
+/** 드로어블(벡터 포함)을 비트맵으로 래스터화(카카오 마커/패턴은 비트맵 필요). */
 private fun Context.rasterize(@DrawableRes resId: Int): Bitmap {
     val drawable = ContextCompat.getDrawable(this, resId)
         ?: return Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)

@@ -11,7 +11,7 @@ import com.example.steptwin.data.remote.WalkRouteRequest
 import com.example.steptwin.domain.gait.TugWeights
 import com.example.steptwin.domain.preview.NamedPlace
 import com.example.steptwin.domain.preview.PlaceSuggestion
-import com.example.steptwin.domain.preview.RoutePreview
+import com.example.steptwin.domain.preview.RoutePreviewResult
 import com.example.steptwin.domain.preview.WalkRouteResult
 import com.example.steptwin.domain.repository.RoutePreviewRepository
 import kotlinx.coroutines.Dispatchers
@@ -30,16 +30,36 @@ class RoutePreviewRepositoryImpl @Inject constructor(
             .getOrDefault(false)
     }
 
-    override suspend fun loadPreview(weights: TugWeights?): RoutePreview =
-        withContext(Dispatchers.IO) {
-            api.routePreview(
+    override suspend fun loadPreview(
+        origin: NamedPlace,
+        destination: NamedPlace,
+        weights: TugWeights?,
+    ): RoutePreviewResult = withContext(Dispatchers.IO) {
+        try {
+            val response = api.routePreview(
                 RoutePreviewRequest(
-                    origin = PlaceDto("출발", CoordinateDto(37.58945, 127.05775)),
-                    destination = PlaceDto("도착", CoordinateDto(37.59375, 127.05158)),
+                    origin = PlaceDto(
+                        name = origin.name,
+                        coordinate = CoordinateDto(origin.point.latitude, origin.point.longitude),
+                    ),
+                    destination = PlaceDto(
+                        name = destination.name,
+                        coordinate = CoordinateDto(destination.point.latitude, destination.point.longitude),
+                    ),
                     preferences = weights?.toPreferences(),
                 )
-            ).toDomain()
+            )
+            RoutePreviewResult.Success(response.toDomain())
+        } catch (e: HttpException) {
+            when (e.code()) {
+                422 -> RoutePreviewResult.InvalidRequest
+                500, 503 -> RoutePreviewResult.BackendError
+                else -> RoutePreviewResult.Failure("HTTP ${e.code()}")
+            }
+        } catch (e: Exception) {
+            RoutePreviewResult.Failure(e.message)
         }
+    }
 
     override suspend fun geocode(query: String): NamedPlace? = withContext(Dispatchers.IO) {
         val trimmed = query.trim()

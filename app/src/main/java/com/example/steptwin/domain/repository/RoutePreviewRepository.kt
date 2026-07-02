@@ -3,15 +3,19 @@ package com.example.steptwin.domain.repository
 import com.example.steptwin.domain.gait.TugWeights
 import com.example.steptwin.domain.preview.NamedPlace
 import com.example.steptwin.domain.preview.PlaceSuggestion
-import com.example.steptwin.domain.preview.RoutePreview
+import com.example.steptwin.domain.preview.RoutePreviewResult
 import com.example.steptwin.domain.preview.WalkRouteResult
 
 interface RoutePreviewRepository {
     /** 서버 health 확인. 성공하면 true. */
     suspend fun checkHealth(): Boolean
 
-    /** (구) 서버에서 지도 미리보기(경로 + 마커)를 받아온다. 실패 시 예외를 던진다. */
-    suspend fun loadPreview(weights: TugWeights?): RoutePreview
+    /** 메인 길찾기: routes/preview 로 다중 세그먼트 경로 미리보기를 받아온다. HTTP 상태 반영. */
+    suspend fun loadPreview(
+        origin: NamedPlace,
+        destination: NamedPlace,
+        weights: TugWeights?,
+    ): RoutePreviewResult
 
     /** 장소 이름을 좌표로 변환(카카오 로컬 검색). 실패 시 null. */
     suspend fun geocode(query: String): NamedPlace?

@@ -5,6 +5,7 @@ import com.example.steptwin.domain.preview.MarkerKind
 import com.example.steptwin.domain.preview.PreviewMarker
 import com.example.steptwin.domain.preview.PreviewSegment
 import com.example.steptwin.domain.preview.RoutePreview
+import com.example.steptwin.domain.preview.RouteViewport
 import com.example.steptwin.domain.preview.SegmentKind
 import com.example.steptwin.domain.preview.SegmentStyle
 import com.example.steptwin.domain.preview.WalkMetrics
@@ -103,15 +104,28 @@ data class HealthResponse(
     val status: String? = null,
 )
 
-/** 서버 RoutePreviewResponse. 지도 렌더링에 필요한 segments/markers 만 파싱한다. */
+/** 서버 RoutePreviewResponse. 지도 렌더링에 필요한 segments/markers/viewport 만 파싱한다. */
 data class RoutePreviewResponse(
     val segments: List<SegmentDto> = emptyList(),
     val markers: List<MarkerDto> = emptyList(),
+    val viewport: ViewportDto? = null,
 ) {
     fun toDomain(): RoutePreview = RoutePreview(
         segments = segments.mapNotNull { it.toDomain() },
         markers = markers.mapNotNull { it.toDomain() },
+        viewport = viewport?.toDomain(),
     )
+}
+
+data class ViewportDto(
+    val southwest: CoordinateDto? = null,
+    val northeast: CoordinateDto? = null,
+) {
+    fun toDomain(): RouteViewport? {
+        val sw = southwest?.toDomain() ?: return null
+        val ne = northeast?.toDomain() ?: return null
+        return RouteViewport(southwest = sw, northeast = ne)
+    }
 }
 
 data class SegmentDto(

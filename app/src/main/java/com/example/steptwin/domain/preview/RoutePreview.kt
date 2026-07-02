@@ -8,7 +8,25 @@ package com.example.steptwin.domain.preview
 data class RoutePreview(
     val segments: List<PreviewSegment>,
     val markers: List<PreviewMarker>,
+    val viewport: RouteViewport? = null,
 )
+
+/** 응답 viewport(카메라 fit용 남서/북동 경계). */
+data class RouteViewport(
+    val southwest: GeoPoint,
+    val northeast: GeoPoint,
+)
+
+/** routes/preview 호출 결과(HTTP 상태 반영). */
+sealed interface RoutePreviewResult {
+    data class Success(val preview: RoutePreview) : RoutePreviewResult
+    /** 422: 잘못된 요청(필드/좌표/선호값). */
+    data object InvalidRequest : RoutePreviewResult
+    /** 500/503: 백엔드/TMAP/DB 오류. */
+    data object BackendError : RoutePreviewResult
+    /** 네트워크/기타 오류. */
+    data class Failure(val message: String?) : RoutePreviewResult
+}
 
 data class GeoPoint(
     val latitude: Double,
