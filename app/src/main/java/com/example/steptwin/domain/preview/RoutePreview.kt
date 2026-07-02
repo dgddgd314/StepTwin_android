@@ -49,7 +49,32 @@ data class PreviewSegment(
     val kind: SegmentKind,
     val geometry: List<GeoPoint>,
     val style: SegmentStyle,
+    /** 대중교통 구간 상세(도보 구간은 null). */
+    val transit: TransitInfo? = null,
 )
+
+/** 대중교통 구간 상세(노선/정류장). */
+data class TransitInfo(
+    /** "subway" | "bus". */
+    val mode: String?,
+    val routeName: String?,
+    val busNumber: String?,
+    val subwayLine: String?,
+    val boardingStop: String?,
+    val alightingStop: String?,
+    val headsign: String?,
+) {
+    val isBus: Boolean get() = mode?.equals("bus", ignoreCase = true) == true
+    val isSubway: Boolean get() = mode?.equals("subway", ignoreCase = true) == true
+
+    /** 노선 표기: 지하철=노선명, 버스=번호. */
+    val lineLabel: String?
+        get() = when {
+            isSubway -> subwayLine ?: routeName
+            isBus -> busNumber ?: routeName
+            else -> routeName
+        }
+}
 
 data class SegmentStyle(
     /** "#16A34A" 형태의 색상. 없으면 kind 기본색을 사용한다. */

@@ -9,6 +9,7 @@ import com.example.steptwin.domain.preview.RouteSummary
 import com.example.steptwin.domain.preview.RouteViewport
 import com.example.steptwin.domain.preview.SegmentKind
 import com.example.steptwin.domain.preview.SegmentStyle
+import com.example.steptwin.domain.preview.TransitInfo
 import com.example.steptwin.domain.preview.WalkMetrics
 import com.example.steptwin.domain.preview.WalkRoute
 import retrofit2.http.Body
@@ -149,6 +150,7 @@ data class SegmentDto(
     val kind: String? = null,
     val geometry: List<CoordinateDto> = emptyList(),
     val render: RenderDto? = null,
+    val transit: TransitDto? = null,
 ) {
     fun toDomain(): PreviewSegment? {
         val points = geometry.mapNotNull { it.toDomain() }
@@ -161,8 +163,29 @@ data class SegmentDto(
                 dashed = render?.pattern?.equals("dashed", ignoreCase = true) == true,
                 width = render?.width,
             ),
+            transit = transit?.toDomain(),
         )
     }
+}
+
+data class TransitDto(
+    val mode: String? = null,
+    val route_name: String? = null,
+    val bus_number: String? = null,
+    val subway_line: String? = null,
+    val boarding_stop: String? = null,
+    val alighting_stop: String? = null,
+    val headsign: String? = null,
+) {
+    fun toDomain(): TransitInfo = TransitInfo(
+        mode = mode,
+        routeName = route_name,
+        busNumber = bus_number,
+        subwayLine = subway_line,
+        boardingStop = boarding_stop,
+        alightingStop = alighting_stop,
+        headsign = headsign,
+    )
 }
 
 data class MarkerDto(

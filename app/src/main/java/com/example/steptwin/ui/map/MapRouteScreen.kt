@@ -360,6 +360,22 @@ private fun RoutePreviewBar(
                     style = MaterialTheme.typography.bodyMedium,
                 )
             }
+            preview.segments.mapNotNull { it.transit }.forEach { transit ->
+                val icon = if (transit.isBus) "🚌" else "🚇" // 🚌 / 🚇
+                val line = transit.lineLabel?.let { if (transit.isBus) "${it}번" else it } ?: "대중교통"
+                val stops = if (!transit.boardingStop.isNullOrBlank() &&
+                    !transit.alightingStop.isNullOrBlank()
+                ) {
+                    " · ${transit.boardingStop} → ${transit.alightingStop}"
+                } else {
+                    ""
+                }
+                Text(
+                    text = "$icon $line$stops",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Button(onClick = onStartNavigation, enabled = uiState.canNavigate) {
                     Text(text = "길안내 시작")
