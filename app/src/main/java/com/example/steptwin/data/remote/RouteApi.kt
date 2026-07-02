@@ -19,20 +19,37 @@ interface RouteApi {
     suspend fun routePreview(@Body request: RoutePreviewRequest): RoutePreviewResponse
 }
 
-/**
- * preview 요청 바디. 서버 계약이 확정되면 필드를 맞추면 된다.
- * 현재는 최신 보행 취약도를 함께 보내 개인화 경로를 요청한다.
- */
+// ---- 요청 (서버 RoutePreviewRequest 계약) ----
+
 data class RoutePreviewRequest(
-    val speedWeight: Float? = null,
-    val turnWeight: Float? = null,
-    val strengthWeight: Float? = null,
+    val origin: PlaceDto,
+    val destination: PlaceDto,
+    val preferences: RoutingPreferencesDto? = null,
 )
+
+data class PlaceDto(
+    val name: String,
+    val coordinate: CoordinateDto,
+)
+
+/** 모든 필드 선택. null 이면 서버 기본값이 적용된다. */
+data class RoutingPreferencesDto(
+    val avoid_stairs: Boolean? = null,
+    val shade_weight: Double? = null,
+    val stair_weight: Double? = null,
+    val slope_weight: Double? = null,
+    val corner_weight: Double? = null,
+    val walking_speed_mps: Double? = null,
+    val max_extra_walk_ratio: Double? = null,
+)
+
+// ---- 응답 ----
 
 data class HealthResponse(
     val status: String? = null,
 )
 
+/** 서버 RoutePreviewResponse. 지도 렌더링에 필요한 segments/markers 만 파싱한다. */
 data class RoutePreviewResponse(
     val segments: List<SegmentDto> = emptyList(),
     val markers: List<MarkerDto> = emptyList(),
@@ -57,6 +74,7 @@ data class SegmentDto(
             style = SegmentStyle(
                 colorHex = render?.color,
                 dashed = render?.pattern?.equals("dashed", ignoreCase = true) == true,
+                width = render?.width,
             ),
         )
     }
@@ -80,6 +98,7 @@ data class MarkerDto(
 data class RenderDto(
     val color: String? = null,
     val pattern: String? = null,
+    val width: Int? = null,
 )
 
 data class CoordinateDto(

@@ -27,6 +27,8 @@ data class SegmentStyle(
     val colorHex: String?,
     /** true 면 점선(dashed), false 면 실선(solid). */
     val dashed: Boolean,
+    /** 서버가 지정한 선 두께(1~16). 없으면 kind 기본값을 사용한다. */
+    val width: Int?,
 )
 
 /** 지도 위 마커. shade_shelter = 그늘막/파라솔, stairs_avoided = 계단 회피 지점. */
@@ -54,12 +56,18 @@ enum class SegmentKind {
 enum class MarkerKind {
     SHADE_SHELTER,
     STAIRS_AVOIDED,
+    STOP,
+    ORIGIN,
+    DESTINATION,
     UNKNOWN;
 
     companion object {
         fun fromRaw(raw: String?): MarkerKind = when (raw?.lowercase()) {
             "shade_shelter" -> SHADE_SHELTER
             "stairs_avoided" -> STAIRS_AVOIDED
+            "stop" -> STOP
+            "origin" -> ORIGIN
+            "destination" -> DESTINATION
             else -> UNKNOWN
         }
     }

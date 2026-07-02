@@ -1,0 +1,20 @@
+<!-- 환승/정류장 마커 (stop, transit-stop) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="36dp"
+    android:height="36dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <path
+        android:fillColor="#2563EB"
+        android:pathData="M24,2 a22,22 0 1 0 0.01,0 Z" />
+    <!-- 정류장 표지 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M16,14 h16 a2,2 0 0 1 2,2 v12 a2,2 0 0 1 -2,2 h-16 a2,2 0 0 1 -2,-2 v-12 a2,2 0 0 1 2,-2 Z" />
+    <path
+        android:fillColor="#2563EB"
+        android:pathData="M18,18 h12 v6 h-12 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M20,30 h2 v4 h-2 Z M26,30 h2 v4 h-2 Z" />
+</vector>

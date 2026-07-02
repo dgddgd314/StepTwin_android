@@ -2,7 +2,12 @@ package com.example.steptwin.ui.map
 
 import android.content.Context
 import android.content.ContextWrapper
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.Color as AndroidColor
+import android.graphics.drawable.BitmapDrawable
+import androidx.annotation.DrawableRes
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -243,7 +248,10 @@ private fun drawPreview(map: KakaoMap, preview: RoutePreview, context: Context) 
 
             val style = RouteLineStyle.from(segment.lineWidth(), segment.lineColor()).let { base ->
                 if (segment.style.dashed) {
-                    base.setPattern(RouteLinePattern.from(R.drawable.route_dash_pattern, 24f))
+                    // 카카오 네이티브는 비트맵을 요구한다. 벡터를 넘기면 makeImage() 에서 크래시.
+                    base.setPattern(
+                        RouteLinePattern.from(context.rasterize(R.drawable.route_dash_pattern), 24f),
+                    )
                 } else {
                     base
                 }
@@ -259,7 +267,7 @@ private fun drawPreview(map: KakaoMap, preview: RoutePreview, context: Context) 
     if (labelManager != null && labelLayer != null) {
         preview.markers.forEach { marker ->
             val styles = labelManager.addLabelStyles(
-                LabelStyles.from(LabelStyle.from(marker.iconRes())),
+                LabelStyles.from(LabelStyle.from(context.rasterize(marker.iconRes()))),
             )
             labelLayer.addLabel(
                 LabelOptions
@@ -269,9 +277,13 @@ private fun drawPreview(map: KakaoMap, preview: RoutePreview, context: Context) 
         }
     }
 
-    // 첫 좌표로 카메라 이동해 데모 구간이 화면에 들어오게 한다.
-    preview.firstPoint()?.let { first ->
-        map.moveCamera(CameraUpdateFactory.newCenterPosition(first, DemoZoom))
+    // 경로/마커 전체가 화면에 들어오도록 카메라를 맞춘다.
+    val allPoints = preview.allPoints()
+    when {
+        allPoints.size >= 2 ->
+            map.moveCamera(CameraUpdateFactory.fitMapPoints(allPoints.toTypedArray(), 120))
+        allPoints.size == 1 ->
+            map.moveCamera(CameraUpdateFactory.newCenterPosition(allPoints.first(), DemoZoom))
     }
 }
 
@@ -286,34 +298,61 @@ private fun PreviewSegment.lineColor(): Int {
     }
 }
 
-private fun PreviewSegment.lineWidth(): Float = when (kind) {
-    SegmentKind.TRANSIT -> 16f
-    else -> 12f
+private fun PreviewSegment.lineWidth(): Float {
+    // 서버가 준 두께(1~16)를 우선 사용, 없으면 kind 기본값.
+    style.width?.let { return it.toFloat() }
+    return when (kind) {
+        SegmentKind.TRANSIT -> 16f
+        else -> 12f
+    }
 }
 
 private fun PreviewMarker.iconRes(): Int {
-    val byKind = when (kind) {
+    // 서버 icon 힌트를 먼저 보고, 없으면 kind 로 판단한다.
+    when (icon?.lowercase()) {
+        "parasol", "shade" -> return R.drawable.ic_marker_parasol
+        "tree" -> return R.drawable.ic_marker_parasol
+        "stairs-off", "stairs", "stairs_avoided" -> return R.drawable.ic_marker_stairs
+        "transit-stop", "stop", "bus", "subway" -> return R.drawable.ic_marker_stop
+        "origin", "start" -> return R.drawable.ic_marker_origin
+        "destination", "goal" -> return R.drawable.ic_marker_destination
+    }
+    return when (kind) {
         MarkerKind.SHADE_SHELTER -> R.drawable.ic_marker_parasol
         MarkerKind.STAIRS_AVOIDED -> R.drawable.ic_marker_stairs
-        MarkerKind.UNKNOWN -> null
-    }
-    if (byKind != null) return byKind
-
-    return when (icon?.lowercase()) {
-        "parasol", "tree", "shade" -> R.drawable.ic_marker_parasol
-        "stairs" -> R.drawable.ic_marker_stairs
-        else -> R.drawable.ic_marker_default
+        MarkerKind.STOP -> R.drawable.ic_marker_stop
+        MarkerKind.ORIGIN -> R.drawable.ic_marker_origin
+        MarkerKind.DESTINATION -> R.drawable.ic_marker_destination
+        MarkerKind.UNKNOWN -> R.drawable.ic_marker_default
     }
 }
 
-private fun RoutePreview.firstPoint(): LatLng? {
-    segments.firstOrNull()?.geometry?.firstOrNull()?.let {
-        return LatLng.from(it.latitude, it.longitude)
+private fun RoutePreview.allPoints(): List<LatLng> {
+    val points = mutableListOf<LatLng>()
+    segments.forEach { segment ->
+        segment.geometry.forEach { points += LatLng.from(it.latitude, it.longitude) }
     }
-    markers.firstOrNull()?.coordinate?.let {
-        return LatLng.from(it.latitude, it.longitude)
+    markers.forEach { points += LatLng.from(it.coordinate.latitude, it.coordinate.longitude) }
+    return points
+}
+
+/**
+ * 드로어블(벡터 포함)을 비트맵으로 래스터화한다.
+ * 카카오 지도 마커/패턴은 네이티브에서 비트맵을 요구하므로, 벡터를 직접 넘기면 크래시한다.
+ */
+private fun Context.rasterize(@DrawableRes resId: Int): Bitmap {
+    val drawable = ContextCompat.getDrawable(this, resId)
+        ?: return Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
+    if (drawable is BitmapDrawable && drawable.bitmap != null) {
+        return drawable.bitmap
     }
-    return null
+    val width = drawable.intrinsicWidth.coerceAtLeast(1)
+    val height = drawable.intrinsicHeight.coerceAtLeast(1)
+    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bitmap)
+    drawable.setBounds(0, 0, width, height)
+    drawable.draw(canvas)
+    return bitmap
 }
 
 private tailrec fun Context.findLifecycleOwner(): LifecycleOwner? = when (this) {

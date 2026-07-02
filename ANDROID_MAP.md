@@ -30,11 +30,19 @@ SERVER_BASE_URL=http://172.30.1.66:8000/
 연결 확인용. `{ "status": "ok" }` 를 기대한다.
 
 ### POST `/api/v1/routes/preview`
-지도에 그릴 데이터를 받는다. 요청 바디(잠정)는 최신 보행 취약도:
+지도에 그릴 데이터를 받는다. 요청 바디는 **출발지/도착지(Place)** + 선택 `preferences`:
 
 ```json
-{ "speedWeight": 0.72, "turnWeight": 0.41, "strengthWeight": 0.83 }
+{
+  "origin":      { "name": "청량리역",   "coordinate": { "latitude": 37.5804, "longitude": 127.0468 } },
+  "destination": { "name": "경희의료원", "coordinate": { "latitude": 37.5936, "longitude": 127.0516 } },
+  "preferences": { "avoid_stairs": true, "stair_weight": 1.0, "slope_weight": 0.7, "corner_weight": 0.4, "walking_speed_mps": 1.15 }
+}
 ```
+
+- `origin` / `destination` 필수. 각각 `{ name, coordinate:{latitude,longitude} }` 구조.
+- `preferences` 선택(생략 시 서버 기본값). 앱은 TUG 보행 취약도(`TugWeights`)를 이 값으로 변환해 보낸다.
+- 잘못된 바디는 **HTTP 422**로 거절된다. (스키마는 서버 `GET /openapi.json` 에서 확인 가능)
 
 응답:
 
@@ -99,9 +107,30 @@ SERVER_BASE_URL=http://172.30.1.66:8000/
 지도 탭("맞춤 길찾기")을 열면 자동으로 health 확인 → preview 호출 → 지도에 그린다.
 상단 배너의 **경로 새로고침** 버튼으로 다시 불러올 수 있다.
 
-## 6. 점선 패턴에 대한 메모
+## 6. 겪은 이슈와 해결 (친구가 똑같이 막힐 수 있는 지점)
 
-카카오 SDK v2 의 점선은 `RouteLinePattern` (반복 이미지) 로 처리한다.
-현재 `res/drawable/route_dash_pattern.xml` (초록 대시 타일)을 사용하며 `custom_walk` 에 적용된다.
-색을 서버 값에 100% 맞춰야 하면 타일 색을 코드에서 동적으로 만들도록 확장하면 된다.
-`custom_walk` 도 기본은 초록 실선이 먼저 깔리므로, 패턴이 어떻게 보이든 선은 항상 보인다.
+실제 폰(삼성 arm64)에서 지도 + 경로 렌더링까지 검증 완료. 도중 막혔던 4가지:
+
+### (1) 지도가 안 뜨고 `MapAuthException(403)`
+- **원인:** 앱키·패키지명·키해시가 다 맞아도, 카카오맵 **API 사용 설정이 꺼져 있으면** 403.
+- **해결:** Kakao Developers → **제품 설정 → 카카오맵 → 활성화 ON**. (반영에 수 분)
+
+### (2) 앱이 실행 즉시 크래시 (`UnsatisfiedLinkError`, `libK3fAndroid.so ... EM_AARCH64`)
+- **원인:** 카카오 지도 SDK는 **arm64/armeabi 네이티브 라이브러리만** 제공. x86/x86_64 에뮬레이터엔 `.so` 가 없다.
+- **해결:** **실제 ARM 폰**(또는 arm64 에뮬레이터)에서 실행. 코드에서는 `KakaoMapSdk.init` 를 `try/catch(Throwable)`
+  로 감싸고 `MapSupport.available` 플래그로 미지원 기기에서는 안내만 표시하도록 처리해 뒀다.
+
+### (3) 경로/마커를 그릴 때 네이티브 SIGSEGV (`PatternBase::makeImage()`)
+- **원인:** 카카오 마커/패턴은 네이티브에서 **비트맵**을 요구한다. **벡터 드로어블(XML)** 을 넘기면
+  `makeImage()` 가 null 을 반환하며 세그폴트. (Java 예외가 아니라 로그캣에 FATAL 로 안 잡힘 → 확인은 tombstone/`F DEBUG`)
+- **해결:** `MapRouteScreen.rasterize()` 로 드로어블을 **런타임에 비트맵으로 변환**한 뒤
+  `LabelStyle.from(bitmap)` / `RouteLinePattern.from(bitmap, distance)` 에 넘긴다.
+
+### (4) `POST /routes/preview` 가 HTTP 422
+- **원인:** 요청 바디를 잘못 보냄(취약도만 보냈음). 서버는 `origin`/`destination`(Place) 를 요구.
+- **해결:** 위 3장의 요청 형식대로 전송. 스키마 확인은 `GET http://172.30.1.66:8000/openapi.json`.
+
+> 키해시(디버그) 확인: PowerShell 에서 keytool 로 뽑는다.
+> `keytool -exportcert -alias androiddebugkey -keystore "$env:USERPROFILE\.android\debug.keystore" -storepass android -keypass android -file cert.der`
+> 후 `[Convert]::ToBase64String([Security.Cryptography.SHA1]::Create().ComputeHash([IO.File]::ReadAllBytes("cert.der")))`.
+> 이 PC 기준값: `naLwtcFb6GHceqWR4mHXuWi7LDA=` (친구 PC에서 빌드하면 값이 달라 별도 등록 필요).
