@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 로고를 적응형 아이콘 안전영역 안쪽으로 넣어 마스크에 안 잘리게 여백을 준다.
+     inset 값을 키우면 로고가 더 작아지고 여백이 커진다(108dp 기준). -->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:drawable="@drawable/ic_launcher_logo"
+    android:inset="18dp" />
