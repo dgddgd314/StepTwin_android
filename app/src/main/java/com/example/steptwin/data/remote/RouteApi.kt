@@ -7,6 +7,8 @@ import com.example.steptwin.domain.preview.PreviewSegment
 import com.example.steptwin.domain.preview.RoutePreview
 import com.example.steptwin.domain.preview.SegmentKind
 import com.example.steptwin.domain.preview.SegmentStyle
+import com.example.steptwin.domain.preview.WalkMetrics
+import com.example.steptwin.domain.preview.WalkRoute
 import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.POST
@@ -17,6 +19,58 @@ interface RouteApi {
 
     @POST("api/v1/routes/preview")
     suspend fun routePreview(@Body request: RoutePreviewRequest): RoutePreviewResponse
+
+    /** 커스텀 도보 경로 최적화 (메인 엔드포인트). */
+    @POST("api/v1/walk-routes/optimize")
+    suspend fun optimizeWalkRoute(@Body request: WalkRouteRequest): WalkRouteResponse
+}
+
+// ---- walk-routes/optimize 요청 ----
+
+data class WalkRouteRequest(
+    val start: PlaceDto,
+    val end: PlaceDto,
+    val preferences: RoutingPreferencesDto? = null,
+)
+
+// ---- walk-routes/optimize 응답 ----
+
+data class WalkRouteResponse(
+    val route_kind: String? = null,
+    val start: SnappedPointDto? = null,
+    val end: SnappedPointDto? = null,
+    val geometry: List<CoordinateDto> = emptyList(),
+    val metrics: WalkMetricsDto? = null,
+    // steps 는 무시(미사용)
+) {
+    fun toDomain(): WalkRoute = WalkRoute(
+        routeKind = route_kind,
+        geometry = geometry.mapNotNull { it.toDomain() },
+        start = start?.coordinate?.toDomain(),
+        end = end?.coordinate?.toDomain(),
+        metrics = metrics?.toDomain(),
+    )
+}
+
+data class SnappedPointDto(
+    val vertex_id: Long? = null,
+    val coordinate: CoordinateDto? = null,
+    val snap_distance_meters: Double? = null,
+)
+
+data class WalkMetricsDto(
+    val total_cost_seconds: Double? = null,
+    val total_distance_meters: Int? = null,
+    val duration_seconds: Int? = null,
+    val stairs_count: Int? = null,
+    val shade_shelters: Int? = null,
+) {
+    fun toDomain(): WalkMetrics = WalkMetrics(
+        distanceMeters = total_distance_meters ?: 0,
+        durationSeconds = duration_seconds ?: 0,
+        stairsCount = stairs_count ?: 0,
+        shadeShelters = shade_shelters ?: 0,
+    )
 }
 
 // ---- 요청 (서버 RoutePreviewRequest 계약) ----

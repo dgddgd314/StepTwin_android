@@ -1,0 +1,61 @@
+name: Android CI
+
+on:
+  push:
+    branches: [ main, dev ]
+  pull_request:
+    branches: [ main, dev ]
+  workflow_dispatch:
+
+# 같은 브랜치에서 새 푸시가 오면 진행 중인 실행은 취소한다.
+concurrency:
+  group: android-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build & Unit Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Gradle 데몬 JVM 툴체인이 21 로 고정돼 있어 JDK 21 필요.
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # SDK 설치 + 라이선스 동의 (AGP 가 compileSdk 36 등을 자동 내려받음).
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      # Gradle 캐시(의존성/빌드 캐시) 자동 구성.
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
+      # Kakao 앱키/서버주소는 local.properties 에서 읽으며, CI 에는 없으므로
+      # 빈 값으로 폴백된다(빌드는 성공, 런타임 지도 인증만 비활성). 시크릿 불필요.
+      - name: Build debug & run unit tests
+        run: ./gradlew --stacktrace --no-daemon assembleDebug testDebugUnitTest
+
+      - name: Upload debug APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: warn
+
+      - name: Upload unit test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-report
+          path: app/build/reports/tests/testDebugUnitTest
+          if-no-files-found: ignore
