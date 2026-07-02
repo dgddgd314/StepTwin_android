@@ -33,8 +33,12 @@ data class TugMetrics(
     val turn180Sec: Float,
     /** 의자 앞 회전(착석 전) 시간. */
     val turnToSitSec: Float,
+    /** 착석(stand-to-sit) 추정 시간. */
+    val sitSec: Float,
     /** 추정 보행 속도(m/s): 왕복 6m / 보행시간. 정확 거리 아님 → "추정". */
     val gaitSpeedMps: Float,
+    /** 기준신호에서 폰 고정이 불안정으로 판정되면 true(결과 신뢰도 낮음). */
+    val unstableMount: Boolean,
     val assessment: TugAssessment,
 ) {
     companion object {
@@ -46,7 +50,9 @@ data class TugMetrics(
             walkSec = 0f,
             turn180Sec = 0f,
             turnToSitSec = 0f,
+            sitSec = 0f,
             gaitSpeedMps = 0f,
+            unstableMount = false,
             assessment = TugAssessment.empty(),
         )
     }

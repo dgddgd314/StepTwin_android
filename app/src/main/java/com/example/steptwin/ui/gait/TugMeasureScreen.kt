@@ -63,7 +63,7 @@ fun TugMeasureScreen(
     val uiState by viewModel.uiState.collectAsState()
 
     TugSensorBridge(
-        isRecording = uiState.isRecording,
+        isSensing = uiState.isSensing,
         onSample = viewModel::addSensorData,
     )
 
@@ -80,6 +80,8 @@ fun TugMeasureScreen(
     }
     LaunchedEffect(uiState.status) {
         when (uiState.status) {
+            TugMeasureStatus.Baseline ->
+                speaker.speak("잠시 가만히 계세요. 기준을 측정합니다.")
             TugMeasureStatus.Recording ->
                 speaker.speak("시작하세요. 일어나서 삼 미터 걷고, 돌아서 제자리로 돌아와 앉으세요.")
             TugMeasureStatus.Complete -> {
@@ -116,6 +118,7 @@ fun TugMeasureScreen(
         when (uiState.status) {
             TugMeasureStatus.Idle -> IdleIntro(onStart = viewModel::startRecording)
             TugMeasureStatus.Countdown -> CountdownView(value = uiState.countdownValue)
+            TugMeasureStatus.Baseline -> BaselineView(message = uiState.message)
             TugMeasureStatus.Recording -> RecordingView(
                 uiState = uiState,
                 onFinish = viewModel::finishRecording,
@@ -178,6 +181,25 @@ private fun CountdownView(value: Int) {
                 text = "의자에 앉은 채로 기다리세요.",
                 style = MaterialTheme.typography.bodyMedium,
             )
+        }
+    }
+}
+
+@Composable
+private fun BaselineView(message: String) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(220.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(text = "기준신호 측정 중", style = MaterialTheme.typography.titleMedium)
+            CircularProgressIndicator()
+            Text(text = message, style = MaterialTheme.typography.bodyMedium)
         }
     }
 }
@@ -310,14 +332,23 @@ private fun ResultView(
                     style = MaterialTheme.typography.bodySmall,
                 )
                 HorizontalDivider()
-                MetricRow("기립(추정)", "${"%.1f".format(metrics.standSec)}초")
+                MetricRow("기립(sit-to-stand)", "${"%.1f".format(metrics.standSec)}초")
                 MetricRow("보행(왕복)", "${"%.1f".format(metrics.walkSec)}초")
                 MetricRow("180° 회전", "${"%.1f".format(metrics.turn180Sec)}초")
                 MetricRow("의자앞 회전", "${"%.1f".format(metrics.turnToSitSec)}초")
+                MetricRow("착석(stand-to-sit)", "${"%.1f".format(metrics.sitSec)}초")
                 MetricRow(
                     "추정 보행속도",
                     "${"%.2f".format(metrics.gaitSpeedMps)} m/s (${assess.gaitBand.label})",
                 )
+
+                if (metrics.unstableMount) {
+                    Text(
+                        text = "⚠ 정지 기준신호에서 폰 고정이 불안정했습니다. 결과 신뢰도가 낮을 수 있어요.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TurnColor,
+                    )
+                }
 
                 if (assess.tags.isNotEmpty()) {
                     HorizontalDivider()
@@ -409,27 +440,28 @@ private fun MetricRow(label: String, value: String) {
 
 @Composable
 private fun TugSensorBridge(
-    isRecording: Boolean,
+    isSensing: Boolean,
     onSample: (SensorSampleType, Long, Float, Float, Float) -> Unit,
 ) {
     val context = LocalContext.current
     val latestOnSample by rememberUpdatedState(onSample)
 
-    DisposableEffect(isRecording, context) {
-        if (!isRecording) {
+    DisposableEffect(isSensing, context) {
+        if (!isSensing) {
             onDispose {}
         } else {
             val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
             val accelerationSensor = sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
                 ?: sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
             val gyroscopeSensor = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
+            val gravitySensor = sensorManager.getDefaultSensor(Sensor.TYPE_GRAVITY)
 
             val listener = object : SensorEventListener {
                 override fun onSensorChanged(event: SensorEvent) {
-                    val type = if (event.sensor.type == Sensor.TYPE_GYROSCOPE) {
-                        SensorSampleType.Gyroscope
-                    } else {
-                        SensorSampleType.LinearAcceleration
+                    val type = when (event.sensor.type) {
+                        Sensor.TYPE_GYROSCOPE -> SensorSampleType.Gyroscope
+                        Sensor.TYPE_GRAVITY -> SensorSampleType.Gravity
+                        else -> SensorSampleType.LinearAcceleration
                     }
                     latestOnSample(
                         type,
@@ -447,6 +479,9 @@ private fun TugSensorBridge(
                 sensorManager.registerListener(listener, it, SensorManager.SENSOR_DELAY_GAME)
             }
             gyroscopeSensor?.let {
+                sensorManager.registerListener(listener, it, SensorManager.SENSOR_DELAY_GAME)
+            }
+            gravitySensor?.let {
                 sensorManager.registerListener(listener, it, SensorManager.SENSOR_DELAY_GAME)
             }
 

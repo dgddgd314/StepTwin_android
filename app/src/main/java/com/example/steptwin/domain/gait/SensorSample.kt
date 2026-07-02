@@ -11,4 +11,5 @@ data class SensorSample(
 enum class SensorSampleType {
     LinearAcceleration,
     Gyroscope,
+    Gravity,
 }
