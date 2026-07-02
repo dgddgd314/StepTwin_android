@@ -5,6 +5,7 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.speech.tts.TextToSpeech
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -30,8 +31,10 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,6 +47,8 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import java.util.Locale
+import kotlin.math.roundToInt
 import com.example.steptwin.domain.gait.FallRisk
 import com.example.steptwin.domain.gait.SensorSampleType
 import com.example.steptwin.domain.gait.TugMetrics
@@ -62,6 +67,37 @@ fun TugMeasureScreen(
         isRecording = uiState.isRecording,
         onSample = viewModel::addSensorData,
     )
+
+    // 허리 고정 시 화면을 못 보므로 한국어 음성으로 안내한다.
+    val speaker = rememberTugSpeaker()
+    LaunchedEffect(uiState.countdownValue, uiState.status) {
+        if (uiState.status == TugMeasureStatus.Countdown) {
+            when (uiState.countdownValue) {
+                3 -> speaker.speak("셋")
+                2 -> speaker.speak("둘")
+                1 -> speaker.speak("하나")
+            }
+        }
+    }
+    LaunchedEffect(uiState.status) {
+        when (uiState.status) {
+            TugMeasureStatus.Recording ->
+                speaker.speak("시작하세요. 일어나서 삼 미터 걷고, 돌아서 제자리로 돌아와 앉으세요.")
+            TugMeasureStatus.Complete -> {
+                val m = uiState.metrics
+                if (m != null) {
+                    speaker.speak(
+                        "측정 완료. 소요 시간 ${m.tugTimeSec.roundToInt()}초. 낙상 위험 ${m.fallRisk.label}.",
+                    )
+                } else {
+                    speaker.speak("측정 완료.")
+                }
+            }
+            else -> Unit
+        }
+    }
+    LaunchedEffect(uiState.walkDone) { if (uiState.walkDone) speaker.speak("보행 감지") }
+    LaunchedEffect(uiState.turnDone) { if (uiState.turnDone) speaker.speak("회전 감지") }
 
     Column(
         modifier = modifier
@@ -532,6 +568,47 @@ private fun DrawScope.drawWave(
         if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
     }
     drawPath(path = path, color = color, style = Stroke(width = 3f))
+}
+
+// ---------------- 음성 안내(TTS) ----------------
+
+@Composable
+private fun rememberTugSpeaker(): TugSpeaker {
+    val context = LocalContext.current
+    val speaker = remember { TugSpeaker(context) }
+    DisposableEffect(speaker) {
+        onDispose { speaker.shutdown() }
+    }
+    return speaker
+}
+
+/** 한국어 TTS 래퍼. 안드로이드 내장 엔진 사용(추가 의존성/권한 없음). */
+private class TugSpeaker(context: Context) {
+    private var ready = false
+    private var engine: TextToSpeech? = null
+
+    init {
+        val app = context.applicationContext
+        engine = TextToSpeech(app) { status ->
+            if (status == TextToSpeech.SUCCESS) {
+                val result = engine?.setLanguage(Locale.KOREAN)
+                    ?: TextToSpeech.LANG_NOT_SUPPORTED
+                ready = result >= TextToSpeech.LANG_AVAILABLE
+            }
+        }
+    }
+
+    fun speak(text: String) {
+        val e = engine ?: return
+        if (!ready) return
+        e.speak(text, TextToSpeech.QUEUE_FLUSH, null, text.hashCode().toString())
+    }
+
+    fun shutdown() {
+        engine?.stop()
+        engine?.shutdown()
+        engine = null
+    }
 }
 
 // 취약도 값을 AI 코멘트로 러프하게 변환.
