@@ -2,7 +2,9 @@ package com.example.steptwin.ui.consent
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -12,10 +14,15 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.example.steptwin.ui.LargeFontToggle
 
 /** 최초 실행 시 개인정보 처리 고지 및 동의 화면(윤리 준수). */
 @Composable
-fun ConsentScreen(onAgree: () -> Unit) {
+fun ConsentScreen(
+    largeFont: Boolean,
+    onToggleLargeFont: () -> Unit,
+    onAgree: () -> Unit,
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -23,6 +30,12 @@ fun ConsentScreen(onAgree: () -> Unit) {
             .padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End,
+        ) {
+            LargeFontToggle(enabled = largeFont, onToggle = onToggleLargeFont)
+        }
         Text(
             text = "개인정보 처리 안내 및 동의",
             style = MaterialTheme.typography.headlineSmall,
