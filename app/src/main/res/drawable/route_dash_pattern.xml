@@ -1,0 +1,10 @@
+<!-- custom_walk 점선용 패턴 타일 (초록 짧은 대시) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="12dp"
+    android:height="8dp"
+    android:viewportWidth="12"
+    android:viewportHeight="8">
+    <path
+        android:fillColor="#16A34A"
+        android:pathData="M1,2 h7 a2,2 0 0 1 0,4 h-7 a2,2 0 0 1 0,-4 Z" />
+</vector>

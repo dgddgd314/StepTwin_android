@@ -13,6 +13,7 @@ ksp = "2.2.10-2.0.2"
 androidxHiltNavigationCompose = "1.2.0"
 retrofit = "2.11.0"
 okhttp = "4.12.0"
+kakaoMap = "2.13.5"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -36,6 +37,7 @@ hilt-android-compiler = { group = "com.google.dagger", name = "hilt-android-comp
 retrofit = { group = "com.squareup.retrofit2", name = "retrofit", version.ref = "retrofit" }
 retrofit-converter-gson = { group = "com.squareup.retrofit2", name = "converter-gson", version.ref = "retrofit" }
 okhttp-logging-interceptor = { group = "com.squareup.okhttp3", name = "logging-interceptor", version.ref = "okhttp" }
+kakao-map = { group = "com.kakao.maps.open", name = "android", version.ref = "kakaoMap" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

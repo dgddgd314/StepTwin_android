@@ -1,0 +1,18 @@
+<!-- 도착지 마커 (destination) - 깃발 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="40dp"
+    android:height="40dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <path
+        android:fillColor="#DC2626"
+        android:pathData="M24,2 a22,22 0 1 0 0.01,0 Z" />
+    <!-- 깃대 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M17,12 h3 v24 h-3 Z" />
+    <!-- 깃발 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M20,13 L34,13 L30,19 L34,25 L20,25 Z" />
+</vector>

@@ -1,0 +1,16 @@
+<!-- 출발지 마커 (origin) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="40dp"
+    android:height="40dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <path
+        android:fillColor="#111827"
+        android:pathData="M24,2 a22,22 0 1 0 0.01,0 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M24,13 a11,11 0 1 0 0.01,0 Z" />
+    <path
+        android:fillColor="#111827"
+        android:pathData="M24,19 a5,5 0 1 0 0.01,0 Z" />
+</vector>
