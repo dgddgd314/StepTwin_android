@@ -175,6 +175,7 @@ fun MapRouteScreen(
                 uiState = uiState,
                 onStartNavigation = viewModel::startNavigation,
                 onEditRoute = viewModel::openPanel,
+                onSaveFavorite = viewModel::saveFavorite,
                 modifier = bottomModifier,
             )
             NavigationState.NavigatingPlaceholder -> NavigatingBar(
@@ -336,6 +337,7 @@ private fun RoutePreviewBar(
     uiState: MapRouteUiState,
     onStartNavigation: () -> Unit,
     onEditRoute: () -> Unit,
+    onSaveFavorite: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val preview = uiState.preview ?: return
@@ -376,9 +378,15 @@ private fun RoutePreviewBar(
                 )
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Button(onClick = onStartNavigation, enabled = uiState.canNavigate) {
                     Text(text = "길안내 시작")
+                }
+                TextButton(onClick = onSaveFavorite, enabled = !uiState.favoriteSaved) {
+                    Text(text = if (uiState.favoriteSaved) "★ 저장됨" else "☆ 즐겨찾기")
                 }
                 TextButton(onClick = onEditRoute) { Text(text = "경로 수정") }
             }

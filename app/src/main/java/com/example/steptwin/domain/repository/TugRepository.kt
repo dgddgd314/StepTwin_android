@@ -13,4 +13,7 @@ interface TugRepository {
         samples: List<SensorSample>,
         baseline: TugBaseline = TugBaseline.UNKNOWN,
     ): TugAnalysisResult
+
+    /** 기기에 남은 보행 프로필(취약도)을 삭제한다. */
+    fun clearLocal()
 }

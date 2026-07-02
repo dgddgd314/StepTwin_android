@@ -2,6 +2,8 @@ package com.example.steptwin.ui.map
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.steptwin.data.favorites.FavoritesStore
+import com.example.steptwin.domain.favorites.FavoriteRoute
 import com.example.steptwin.domain.preview.GeoPoint
 import com.example.steptwin.domain.preview.NamedPlace
 import com.example.steptwin.domain.preview.PlaceSuggestion
@@ -27,6 +29,7 @@ enum class NavigationState { Idle, RoutePreviewShown, NavigatingPlaceholder }
 class MapRouteViewModel @Inject constructor(
     private val previewRepository: RoutePreviewRepository,
     private val tugRepository: TugRepository,
+    private val favoritesStore: FavoritesStore,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(MapRouteUiState())
@@ -34,8 +37,22 @@ class MapRouteViewModel @Inject constructor(
 
     private var selectedStart: NamedPlace? = null
     private var selectedEnd: NamedPlace? = null
+    private var lastOrigin: NamedPlace? = null
+    private var lastDestination: NamedPlace? = null
     private var startSuggestJob: Job? = null
     private var endSuggestJob: Job? = null
+
+    init {
+        // "내 보행정보"에서 고른 즐겨찾기를 이어받아 자동으로 길찾기 실행.
+        viewModelScope.launch {
+            favoritesStore.pendingRoute.collect { pending ->
+                if (pending != null) {
+                    applyFavorite(pending)
+                    favoritesStore.consumePending()
+                }
+            }
+        }
+    }
 
     // ---- 패널 열기/닫기 ----
     fun openPanel() = _uiState.update { it.copy(panelState = RoutePanelState.Open) }
@@ -107,6 +124,7 @@ class MapRouteViewModel @Inject constructor(
                     isLoading = true,
                     statusMessage = null,
                     isError = false,
+                    favoriteSaved = false,
                     activeField = ActiveField.NONE,
                     startSuggestions = emptyList(),
                     endSuggestions = emptyList(),
@@ -116,6 +134,8 @@ class MapRouteViewModel @Inject constructor(
             val healthy = previewRepository.checkHealth()
             val origin = selectedStart ?: previewRepository.geocode(state.startQuery)
             val destination = selectedEnd ?: previewRepository.geocode(state.endQuery)
+            lastOrigin = origin
+            lastDestination = destination
 
             if (origin == null || destination == null) {
                 val missing = when {
@@ -191,6 +211,34 @@ class MapRouteViewModel @Inject constructor(
         }
     }
 
+    // ---- 즐겨찾기 ----
+    fun saveFavorite() {
+        val origin = lastOrigin
+        val destination = lastDestination
+        if (origin == null || destination == null) return
+        favoritesStore.add(FavoriteRoute.of(origin, destination))
+        _uiState.update { it.copy(favoriteSaved = true) }
+    }
+
+    /** 즐겨찾기에서 선택한 경로를 채우고 바로 길찾기를 실행한다. */
+    private fun applyFavorite(favorite: FavoriteRoute) {
+        selectedStart = favorite.originPlace()
+        selectedEnd = favorite.destPlace()
+        _uiState.update {
+            it.copy(
+                startQuery = favorite.originName,
+                endQuery = favorite.destName,
+                startSuggestions = emptyList(),
+                endSuggestions = emptyList(),
+                resolvedStart = favorite.originPlace().point,
+                resolvedEnd = favorite.destPlace().point,
+                panelState = RoutePanelState.Closed,
+                activeField = ActiveField.NONE,
+            )
+        }
+        search()
+    }
+
     // ---- 길안내(placeholder) ----
     fun startNavigation() = _uiState.update {
         if (it.navState == NavigationState.RoutePreviewShown) {
@@ -228,6 +276,7 @@ data class MapRouteUiState(
     val resolvedEnd: GeoPoint? = null,
     val statusMessage: String? = null,
     val isError: Boolean = false,
+    val favoriteSaved: Boolean = false,
 ) {
     val canNavigate: Boolean = navState == NavigationState.RoutePreviewShown &&
         (preview?.segments?.isNotEmpty() == true)

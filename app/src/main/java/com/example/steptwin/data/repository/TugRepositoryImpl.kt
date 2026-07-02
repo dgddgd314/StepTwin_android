@@ -39,4 +39,8 @@ class TugRepositoryImpl @Inject constructor(
             syncMessage = syncResult.exceptionOrNull()?.message,
         )
     }
+
+    override fun clearLocal() {
+        _latestWeights.value = null
+    }
 }

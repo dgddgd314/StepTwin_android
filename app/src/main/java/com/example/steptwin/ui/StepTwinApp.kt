@@ -82,6 +82,11 @@ fun StepTwinApp() {
                 val viewModel: ProfileViewModel = hiltViewModel()
                 ProfileScreen(
                     viewModel = viewModel,
+                    onOpenRoute = { currentDestination = AppDestination.Route },
+                    onWithdrawConsent = {
+                        prefs.edit().putBoolean("consent_given", false).apply()
+                        consented = false
+                    },
                     modifier = contentModifier,
                 )
             }
