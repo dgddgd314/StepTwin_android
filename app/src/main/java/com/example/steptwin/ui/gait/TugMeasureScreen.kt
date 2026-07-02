@@ -27,8 +27,11 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -116,7 +119,14 @@ fun TugMeasureScreen(
         )
 
         when (uiState.status) {
-            TugMeasureStatus.Idle -> IdleIntro(onStart = viewModel::startRecording)
+            TugMeasureStatus.Idle -> IdleIntro(
+                uiState = uiState,
+                onStart = viewModel::startRecording,
+                onManualTugChange = viewModel::updateManualTug,
+                onManualGaitChange = viewModel::updateManualGait,
+                onManualTurnChange = viewModel::updateManualTurn,
+                onSubmitManual = viewModel::submitManual,
+            )
             TugMeasureStatus.Countdown -> CountdownView(value = uiState.countdownValue)
             TugMeasureStatus.Baseline -> BaselineView(message = uiState.message)
             TugMeasureStatus.Recording -> RecordingView(
@@ -135,7 +145,14 @@ fun TugMeasureScreen(
 // ---------------- 상태별 화면 ----------------
 
 @Composable
-private fun IdleIntro(onStart: () -> Unit) {
+private fun IdleIntro(
+    uiState: TugMeasureUiState,
+    onStart: () -> Unit,
+    onManualTugChange: (String) -> Unit,
+    onManualGaitChange: (String) -> Unit,
+    onManualTurnChange: (String) -> Unit,
+    onSubmitManual: () -> Unit,
+) {
     Text(text = "TUG(Timed Up and Go) 검사는 다음 순서로 진행합니다.")
     Card {
         Column(
@@ -159,6 +176,49 @@ private fun IdleIntro(onStart: () -> Unit) {
     )
     Button(onClick = onStart) {
         Text(text = "TUG 검사 시작")
+    }
+
+    HorizontalDivider()
+
+    // 의료진 직접 입력(측정 대체)
+    Text(text = "의료진 직접 입력", style = MaterialTheme.typography.titleMedium)
+    Text(
+        text = "다른 곳에서 이미 TUG를 측정했다면 값을 입력해 결과를 받을 수 있습니다.",
+        style = MaterialTheme.typography.bodySmall,
+    )
+    OutlinedTextField(
+        value = uiState.manualTug,
+        onValueChange = onManualTugChange,
+        label = { Text(text = "TUG 총시간 (초, 필수)") },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+        modifier = Modifier.fillMaxWidth(),
+    )
+    OutlinedTextField(
+        value = uiState.manualGait,
+        onValueChange = onManualGaitChange,
+        label = { Text(text = "보행속도 (m/s, 선택)") },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+        modifier = Modifier.fillMaxWidth(),
+    )
+    OutlinedTextField(
+        value = uiState.manualTurn,
+        onValueChange = onManualTurnChange,
+        label = { Text(text = "180° 회전시간 (초, 선택)") },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+        modifier = Modifier.fillMaxWidth(),
+    )
+    if (uiState.manualError != null) {
+        Text(
+            text = uiState.manualError,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+    }
+    OutlinedButton(onClick = onSubmitManual, modifier = Modifier.fillMaxWidth()) {
+        Text(text = "입력값으로 결과 보기")
     }
 }
 
@@ -308,6 +368,13 @@ private fun ResultView(
             ) {
                 val assess = metrics.assessment
                 Text(text = "TUG 결과", style = MaterialTheme.typography.titleMedium)
+                if (uiState.manualEntry) {
+                    Text(
+                        text = "※ 의료진이 입력한 TUG 값 기반 결과입니다(세부 구간은 추정).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.tertiary,
+                    )
+                }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,

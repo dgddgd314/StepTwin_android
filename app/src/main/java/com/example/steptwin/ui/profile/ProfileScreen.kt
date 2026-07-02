@@ -26,6 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.example.steptwin.domain.favorites.FavoriteRoute
+import com.example.steptwin.domain.gait.TugWeights
 import com.example.steptwin.ui.components.WeightVectorSummary
 
 @Composable
@@ -50,9 +51,11 @@ fun ProfileScreen(
 
         // ---- 보행 프로필 ----
         val weights = uiState.weights
-        if (weights == null) {
-            Text(text = "아직 저장된 보행 검사 결과가 없습니다.")
-            Text(text = "보행 검사 탭에서 TUG 테스트를 완료하면 이곳에 취약도 벡터가 표시됩니다.")
+        val untested = weights == null ||
+            (weights.speedWeight == 0f && weights.turnWeight == 0f && weights.strengthWeight == 0f)
+        if (untested) {
+            Text(text = "아직 보행 검사를 하지 않았습니다. 세 취약도(속도·회전·근력)는 모두 0입니다.")
+            WeightVectorSummary(weights = weights ?: TugWeights.zero())
         } else {
             Text(text = "최근 검사에서 계산된 개인 보행 프로필입니다.")
             WeightVectorSummary(weights = weights)

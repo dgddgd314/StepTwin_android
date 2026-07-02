@@ -138,6 +138,57 @@ class TugMeasureViewModel @Inject constructor(
         }
     }
 
+    // ---- 의료진 직접 입력 ----
+    fun updateManualTug(text: String) =
+        _uiState.update { it.copy(manualTug = text, manualError = null) }
+
+    fun updateManualGait(text: String) =
+        _uiState.update { it.copy(manualGait = text, manualError = null) }
+
+    fun updateManualTurn(text: String) =
+        _uiState.update { it.copy(manualTurn = text, manualError = null) }
+
+    fun submitManual() {
+        val state = _uiState.value
+        val tug = state.manualTug.trim().toFloatOrNull()
+        if (tug == null || tug <= 0f || tug > 120f) {
+            _uiState.update { it.copy(manualError = "TUG 총시간(초)을 올바르게 입력하세요.") }
+            return
+        }
+        val gait = state.manualGait.trim().takeIf { it.isNotEmpty() }?.toFloatOrNull()
+        if (state.manualGait.isNotBlank() && gait == null) {
+            _uiState.update { it.copy(manualError = "보행속도(m/s)를 숫자로 입력하세요.") }
+            return
+        }
+        val turn = state.manualTurn.trim().takeIf { it.isNotEmpty() }?.toFloatOrNull()
+        if (state.manualTurn.isNotBlank() && turn == null) {
+            _uiState.update { it.copy(manualError = "180° 회전시간(초)을 숫자로 입력하세요.") }
+            return
+        }
+
+        recordingJob?.cancel()
+        recordingJob = viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    status = TugMeasureStatus.Analyzing,
+                    manualError = null,
+                    message = "입력한 TUG 값으로 분석하고 있습니다.",
+                )
+            }
+            val result = repository.submitManual(tug, gait, turn)
+            _uiState.update {
+                it.copy(
+                    status = TugMeasureStatus.Complete,
+                    weights = result.weights,
+                    metrics = result.metrics,
+                    manualEntry = true,
+                    message = "의료진이 입력한 TUG 값으로 결과를 계산했습니다.",
+                    syncMessage = result.syncMessage,
+                )
+            }
+        }
+    }
+
     fun addSensorData(
         type: SensorSampleType,
         timestampNanos: Long,
@@ -324,6 +375,11 @@ data class TugMeasureUiState(
     val standDone: Boolean = false,
     val walkDone: Boolean = false,
     val turnDone: Boolean = false,
+    val manualTug: String = "",
+    val manualGait: String = "",
+    val manualTurn: String = "",
+    val manualError: String? = null,
+    val manualEntry: Boolean = false,
 ) {
     val isRecording: Boolean = status == TugMeasureStatus.Recording
     /** 센서 리스너를 켜둘 구간(기준신호 + 측정). */

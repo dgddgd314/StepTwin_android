@@ -40,6 +40,48 @@ class TugCalculator @Inject constructor() {
         )
     }
 
+    /**
+     * 의료진이 다른 곳에서 측정한 TUG 값을 직접 입력할 때 사용.
+     * 총시간은 필수, 보행속도·180° 회전시간은 선택(없으면 총시간에서 추정).
+     */
+    fun fromManual(
+        clinicalTugSec: Float,
+        gaitSpeedMps: Float?,
+        turn180Sec: Float?,
+    ): TugAnalysis {
+        val gait = (gaitSpeedMps ?: (6f / (clinicalTugSec - 4f).coerceAtLeast(3f)))
+            .coerceIn(0.2f, 2.0f)
+        val turn = (turn180Sec ?: (clinicalTugSec * 0.15f)).coerceIn(0.5f, 5.0f)
+        val standSec = 1.0f
+        val turnPeakEst = 2.5f
+        val standPeakEst = 4.0f
+
+        val features = floatArrayOf(
+            normalize(gait.toDouble(), 0.4, 1.4),
+            normalize(clinicalTugSec.toDouble(), 8.0, 25.0),
+            normalize(turn.toDouble(), 0.5, 4.0),
+            normalize(turnPeakEst.toDouble(), 1.0, 5.0),
+            normalize(standSec.toDouble(), 0.4, 3.0),
+            normalize(standPeakEst.toDouble(), 1.5, 8.0),
+        )
+        val out = TugModel.predict(features)
+
+        val metrics = TugMetrics(
+            clinicalTugSec = clinicalTugSec,
+            movementSec = clinicalTugSec,
+            reactionSec = 0f,
+            standSec = standSec,
+            walkSec = (6f / gait).coerceIn(2f, 30f),
+            turn180Sec = turn,
+            turnToSitSec = 1.0f,
+            sitSec = 1.0f,
+            gaitSpeedMps = gait,
+            unstableMount = false,
+            assessment = buildAssessment(clinicalTugSec, gait, turn),
+        )
+        return TugAnalysis(TugWeights(out[0], out[1], out[2]), metrics)
+    }
+
     private class Segmentation(
         val metrics: TugMetrics,
         val turnPeak: Float,

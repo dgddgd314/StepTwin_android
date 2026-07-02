@@ -6,11 +6,10 @@ data class TugWeights(
     val strengthWeight: Float,
 ) {
     companion object {
-        fun neutral() = TugWeights(
-            speedWeight = 0.35f,
-            turnWeight = 0.35f,
-            strengthWeight = 0.35f,
-        )
+        /** 검사를 한 번도 하지 않은 사용자: 세 취약도 모두 0. */
+        fun zero() = TugWeights(0f, 0f, 0f)
+
+        fun neutral() = zero()
     }
 }
 
