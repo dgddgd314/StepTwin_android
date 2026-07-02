@@ -69,6 +69,9 @@ import com.kakao.vectormap.route.RouteLineStylesSet
 private val DemoCenter = LatLng.from(37.5722, 127.0146)
 private const val DemoZoom = 12
 
+/** 경로 화살표 반복 간격(픽셀). 클수록 화살표가 드물게 찍힌다. */
+private const val ArrowSpacing = 64f
+
 @Composable
 fun MapRouteScreen(
     viewModel: MapRouteViewModel,
@@ -424,18 +427,13 @@ private fun drawPreview(
 
     // 세그먼트: 각각 개별 polyline
     if (routeLayer != null && preview != null) {
+        // 진행 방향 화살표 패턴(선 방향으로 회전, 간격 ArrowSpacing). 비트맵 래스터화 필수.
+        val arrowPattern = RouteLinePattern.from(context.rasterize(R.drawable.route_arrow), ArrowSpacing)
         preview.segments.forEach { segment ->
             val points = segment.geometry.map { LatLng.from(it.latitude, it.longitude) }
             if (points.size < 2) return@forEach
-            val style = RouteLineStyle.from(segment.lineWidth(), segment.lineColor()).let { base ->
-                if (segment.style.dashed) {
-                    base.setPattern(
-                        RouteLinePattern.from(context.rasterize(R.drawable.route_dash_pattern), 24f),
-                    )
-                } else {
-                    base
-                }
-            }
+            val style = RouteLineStyle.from(segment.lineWidth(), segment.lineColor())
+                .setPattern(arrowPattern)
             val stylesSet = RouteLineStylesSet.from(RouteLineStyles.from(style))
             val lineSegment = RouteLineSegment.from(points, stylesSet.getStyles(0))
             routeLayer.addRouteLine(RouteLineOptions.from(lineSegment).setStylesSet(stylesSet))
@@ -499,11 +497,9 @@ private fun PreviewSegment.lineColor(): Int {
 }
 
 private fun PreviewSegment.lineWidth(): Float {
-    style.width?.let { return it.toFloat() }
-    return when (kind) {
-        SegmentKind.TRANSIT -> 8f
-        else -> 6f
-    }
+    // 서버 두께를 기준으로 더 두껍게(가독성). 없으면 kind 기본값.
+    val base = style.width?.toFloat() ?: if (kind == SegmentKind.TRANSIT) 8f else 6f
+    return (base * 2.2f).coerceIn(14f, 26f)
 }
 
 private fun PreviewMarker.iconRes(): Int {

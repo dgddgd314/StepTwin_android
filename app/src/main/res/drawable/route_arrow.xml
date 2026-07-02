@@ -1,0 +1,11 @@
+<!-- 경로 진행 방향 화살표(오른쪽=진행방향). 카카오 RouteLinePattern 이 선 방향으로 회전시켜 그린다. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="18dp"
+    android:height="18dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- 흰색 셰브론(>) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M7,3 L11,3 L19,12 L11,21 L7,21 L15,12 Z" />
+</vector>
