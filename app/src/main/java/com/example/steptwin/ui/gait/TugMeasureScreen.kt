@@ -49,7 +49,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import java.util.Locale
 import kotlin.math.roundToInt
-import com.example.steptwin.domain.gait.FallRisk
 import com.example.steptwin.domain.gait.SensorSampleType
 import com.example.steptwin.domain.gait.TugMetrics
 import com.example.steptwin.domain.gait.TugPhase
@@ -86,9 +85,12 @@ fun TugMeasureScreen(
             TugMeasureStatus.Complete -> {
                 val m = uiState.metrics
                 if (m != null) {
-                    speaker.speak(
-                        "측정 완료. 소요 시간 ${m.tugTimeSec.roundToInt()}초. 낙상 위험 ${m.fallRisk.label}.",
-                    )
+                    val follow = if (m.assessment.needsFollowUp) {
+                        "이동기능 추가평가를 권장합니다."
+                    } else {
+                        "특이 신호는 낮은 편입니다."
+                    }
+                    speaker.speak("측정 완료. 임상 소요 시간 ${m.clinicalTugSec.roundToInt()}초. $follow")
                 } else {
                     speaker.speak("측정 완료.")
                 }
@@ -282,6 +284,7 @@ private fun ResultView(
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
+                val assess = metrics.assessment
                 Text(text = "TUG 결과", style = MaterialTheme.typography.titleMedium)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -289,21 +292,44 @@ private fun ResultView(
                     verticalAlignment = Alignment.Bottom,
                 ) {
                     Text(
-                        text = "${"%.1f".format(metrics.tugTimeSec)}초",
+                        text = "${"%.1f".format(metrics.clinicalTugSec)}초",
                         style = MaterialTheme.typography.displaySmall,
                         fontWeight = FontWeight.Bold,
                     )
                     Text(
-                        text = "낙상위험 ${metrics.fallRisk.label}",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = metrics.fallRisk.color(),
+                        text = if (assess.needsFollowUp) "이동기능 추가평가 권장" else "추가 신호 낮음",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = if (assess.needsFollowUp) TurnColor else WalkColor,
                     )
                 }
+                // 시간 3종 분리(서로 다른 조건의 임상 컷오프 오적용 방지)
+                Text(
+                    text = "임상 ${"%.1f".format(metrics.clinicalTugSec)}초 · " +
+                        "동작 ${"%.1f".format(metrics.movementSec)}초 · " +
+                        "반응 ${"%.1f".format(metrics.reactionSec)}초",
+                    style = MaterialTheme.typography.bodySmall,
+                )
                 HorizontalDivider()
-                MetricRow("일어서기", "${"%.1f".format(metrics.standSec)}초")
+                MetricRow("기립(추정)", "${"%.1f".format(metrics.standSec)}초")
                 MetricRow("보행(왕복)", "${"%.1f".format(metrics.walkSec)}초")
-                MetricRow("회전", "${"%.1f".format(metrics.turnSec)}초")
-                MetricRow("추정 보행속도", "${"%.2f".format(metrics.gaitSpeedMps)} m/s")
+                MetricRow("180° 회전", "${"%.1f".format(metrics.turn180Sec)}초")
+                MetricRow("의자앞 회전", "${"%.1f".format(metrics.turnToSitSec)}초")
+                MetricRow(
+                    "추정 보행속도",
+                    "${"%.2f".format(metrics.gaitSpeedMps)} m/s (${assess.gaitBand.label})",
+                )
+
+                if (assess.tags.isNotEmpty()) {
+                    HorizontalDivider()
+                    assess.tags.forEach { tag ->
+                        Text(text = "• $tag", style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+                Text(
+                    text = "본 결과는 낙상·허약을 진단하지 않으며, 낙상이력·근력·균형·인지·약물·보행환경과 " +
+                        "함께 해석해야 합니다. 정확한 보행속도는 별도 4m 보행검사를 권장합니다.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
         }
     }
@@ -453,13 +479,6 @@ private fun TugPhase.label(): String = when (this) {
     TugPhase.Still -> "정지·자세전환"
     TugPhase.Walk -> "보행"
     TugPhase.Turn -> "회전"
-}
-
-private fun FallRisk.color(): Color = when (this) {
-    FallRisk.Low -> WalkColor
-    FallRisk.Moderate -> TurnColor
-    FallRisk.High -> Color(0xFFDC2626)
-    FallRisk.Unknown -> StillColor
 }
 
 @Composable

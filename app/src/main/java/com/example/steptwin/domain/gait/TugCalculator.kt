@@ -5,10 +5,9 @@ import kotlin.math.sqrt
 import javax.inject.Inject
 
 /**
- * TUG 프로토콜(일어서기 → 3m 보행 → 회전 → 복귀 → 앉기) 수행 신호를 오프라인 분석한다.
- * 1) 시간축을 고정 간격으로 나눠 각 구간을 정지/보행/회전으로 분류
- * 2) 구간별 시간·보행속도·회전/일어서기 세기 등 TUG 지표 산출
- * 3) 정규화된 6개 지표를 온디바이스 MLP([TugModel])에 넣어 3대 취약도 추론
+ * TUG 프로토콜(착석→기립→3m 보행→180° 회전→복귀→의자앞 회전→착석) 신호를 오프라인 분석한다.
+ * 시간은 임상/동작/반응 3종으로 분리하고, 회전은 180°와 착석전 회전을 분리한다.
+ * 서로 다른 조건의 임상 컷오프(13.5초/0.8·1.0/2.45초)는 각각 탐색적으로만 사용한다.
  */
 class TugCalculator @Inject constructor() {
 
@@ -19,13 +18,14 @@ class TugCalculator @Inject constructor() {
 
         val seg = segment(accel, gyro) ?: return TugAnalysis.neutral()
 
+        // 라우팅용 취약도 벡터(온디바이스 MLP). 임상 판정과 분리된 개인화 입력.
         val features = floatArrayOf(
             normalize(seg.metrics.gaitSpeedMps.toDouble(), 0.4, 1.4),   // gaitSpeedN
-            normalize(seg.metrics.tugTimeSec.toDouble(), 8.0, 25.0),    // tugTimeN
-            normalize(seg.metrics.turnSec.toDouble(), 0.5, 4.0),        // turnSecN
-            normalize(seg.turnPeak.toDouble(), 1.0, 5.0),               // turnPeakN
-            normalize(seg.metrics.standSec.toDouble(), 0.4, 3.0),       // standSecN
-            normalize(seg.standPeak.toDouble(), 1.5, 8.0),              // standPeakN
+            normalize(seg.metrics.clinicalTugSec.toDouble(), 8.0, 25.0), // tugTimeN(임상)
+            normalize(seg.metrics.turn180Sec.toDouble(), 0.5, 4.0),      // turnSecN(180°)
+            normalize(seg.turnPeak.toDouble(), 1.0, 5.0),                // turnPeakN
+            normalize(seg.metrics.standSec.toDouble(), 0.4, 3.0),        // standSecN
+            normalize(seg.standPeak.toDouble(), 1.5, 8.0),               // standPeakN
         )
         val out = TugModel.predict(features)
 
@@ -61,14 +61,12 @@ class TugCalculator @Inject constructor() {
         val bins = (((endNs - startNs) / DtNs) + 1).toInt().coerceIn(1, 4000)
         val accelMag = binMeans(accel, startNs, bins) { magnitude(it.x, it.y, it.z) }
         val gyroMag = binMeans(gyro, startNs, bins) { magnitude(it.x, it.y, it.z) }
+        val dtSec = DtNs / 1_000_000_000f
 
         var baseline = accelMag.firstOrNull() ?: 0f
         var moveEma = 0f
         var gyroEma = 0f
-        val dtSec = DtNs / 1_000_000_000f
-
-        var walkBins = 0
-        var turnBins = 0
+        val phases = Array(bins) { TugPhase.Still }
         var onsetBin = -1
         var firstWalkBin = -1
         var turnPeak = 0f
@@ -88,24 +86,45 @@ class TugCalculator @Inject constructor() {
                 moveEma > WalkAccelThreshold -> TugPhase.Walk
                 else -> TugPhase.Still
             }
-            when (phase) {
-                TugPhase.Walk -> {
-                    walkBins++
-                    if (firstWalkBin < 0) firstWalkBin = b
-                }
-                TugPhase.Turn -> turnBins++
-                TugPhase.Still -> Unit
-            }
-            // 일어서기 세기: 움직임 시작 후 약 2.5초 내 최대 움직임 가속
+            phases[b] = phase
+            if (phase == TugPhase.Walk && firstWalkBin < 0) firstWalkBin = b
             if (onsetBin >= 0 && b <= onsetBin + StandWindowBins && movement > standPeak) {
                 standPeak = movement
             }
         }
 
         val onset = if (onsetBin >= 0) onsetBin else 0
-        val tugTimeSec = ((bins - 1 - onset).coerceAtLeast(0)) * dtSec
+        // 마지막 움직임 bin = 착석 완료 지점. 이후의 정지구간(자동종료 대기)은 제외한다.
+        var settleBin = onset
+        for (b in bins - 1 downTo 0) {
+            if (phases[b] != TugPhase.Still) { settleBin = b; break }
+        }
+        settleBin = settleBin.coerceIn(onset, bins - 1)
+
+        val reactionSec = onset * dtSec                                   // 신호 → 첫 움직임
+        val clinicalTugSec = settleBin * dtSec                           // 신호 → 착석
+        val movementSec = (settleBin - onset).coerceAtLeast(0) * dtSec    // 첫 움직임 → 착석
+
+        // 보행 총 시간
+        var walkBins = 0
+        for (b in 0 until bins) if (phases[b] == TugPhase.Walk) walkBins++
         val walkSec = walkBins * dtSec
-        val turnSec = turnBins * dtSec
+
+        // 회전 run 분리: 첫 run = 180° 회전, 마지막 run = 의자앞 회전(착석 전)
+        val turnRuns = mutableListOf<Int>()
+        var run = 0
+        for (b in 0 until bins) {
+            if (phases[b] == TugPhase.Turn) {
+                run++
+            } else if (run > 0) {
+                turnRuns += run
+                run = 0
+            }
+        }
+        if (run > 0) turnRuns += run
+        val turn180Sec = (turnRuns.firstOrNull() ?: 0) * dtSec
+        val turnToSitSec = if (turnRuns.size >= 2) turnRuns.last() * dtSec else 0f
+
         val standSec = if (firstWalkBin > onset) {
             ((firstWalkBin - onset) * dtSec).coerceIn(0.3f, 4.0f)
         } else {
@@ -114,17 +133,44 @@ class TugCalculator @Inject constructor() {
         val gaitSpeed = if (walkSec > 0.5f) (6.0f / walkSec).coerceIn(0.2f, 2.0f) else 0.6f
 
         val metrics = TugMetrics(
-            tugTimeSec = tugTimeSec,
+            clinicalTugSec = clinicalTugSec,
+            movementSec = movementSec,
+            reactionSec = reactionSec,
             standSec = standSec,
             walkSec = walkSec,
-            turnSec = turnSec,
+            turn180Sec = turn180Sec,
+            turnToSitSec = turnToSitSec,
             gaitSpeedMps = gaitSpeed,
-            fallRisk = FallRisk.fromTugTime(tugTimeSec),
+            assessment = buildAssessment(clinicalTugSec, gaitSpeed, turn180Sec),
         )
         return Segmentation(metrics, turnPeak, standPeak)
     }
 
-    /** 샘플을 고정 간격 bin 으로 나눠 각 bin 의 평균값을 만든다(빈 bin 은 직전 값 유지). */
+    private fun buildAssessment(
+        clinicalSec: Float,
+        gaitSpeed: Float,
+        turn180Sec: Float,
+    ): TugAssessment {
+        val band = GaitSpeedBand.of(gaitSpeed)
+        val needsFollowUp = clinicalSec >= ClinicalFollowUpSec
+        val turnDelay = turn180Sec > TurnDelaySec
+        val slow = band == GaitSpeedBand.Slow || band == GaitSpeedBand.VerySlow
+        val signals = (if (needsFollowUp) 1 else 0) + (if (slow) 1 else 0) + (if (turnDelay) 1 else 0)
+        val complex = signals >= 2
+
+        val tags = buildList {
+            if (needsFollowUp) add("이동기능 추가평가 권장")
+            when (band) {
+                GaitSpeedBand.VerySlow -> add("고도 느린 보행형")
+                GaitSpeedBand.Slow -> add("느린 보행형")
+                else -> Unit
+            }
+            if (turnDelay) add("회전 지연형(탐색적)")
+            if (complex) add("복합 이동취약 패턴")
+        }
+        return TugAssessment(needsFollowUp, band, turnDelay, complex, tags)
+    }
+
     private inline fun binMeans(
         samples: List<SensorSample>,
         startNs: Long,
@@ -165,5 +211,9 @@ class TugCalculator @Inject constructor() {
         const val WalkAccelThreshold = 1.2f
         const val OnsetThreshold = 0.6f
         const val StandWindowBins = 50 // 약 2.5초
+
+        // 임상 컷오프(각각 다른 조건 → 탐색적 사용)
+        const val ClinicalFollowUpSec = 13.5f // Shumway-Cook, 임상(신호기준) 시간에만 적용
+        const val TurnDelaySec = 2.45f // 허약 관련 180° 회전 지연(탐색적)
     }
 }
