@@ -1,0 +1,13 @@
+<!-- 내 위치 점(흰 테두리 + 브랜드 인디고). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="26dp"
+    android:height="26dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M12,1 a11,11 0 1 0 0.001 0 z" />
+    <path
+        android:fillColor="#283186"
+        android:pathData="M12,4 a8,8 0 1 0 0.001 0 z" />
+</vector>

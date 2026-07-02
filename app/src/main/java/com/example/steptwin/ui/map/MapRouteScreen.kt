@@ -1,11 +1,18 @@
 package com.example.steptwin.ui.map
 
+import android.Manifest
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color as AndroidColor
 import android.graphics.drawable.BitmapDrawable
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -20,8 +27,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -42,18 +51,21 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import com.example.steptwin.R
+import com.example.steptwin.domain.nav.NavMode
 import com.example.steptwin.domain.preview.GeoPoint
 import com.example.steptwin.domain.preview.PlaceSuggestion
 import com.example.steptwin.domain.preview.PreviewMarker
 import com.example.steptwin.domain.preview.PreviewSegment
 import com.example.steptwin.domain.preview.RoutePreview
 import com.example.steptwin.domain.preview.SegmentKind
+import com.example.steptwin.ui.common.rememberKoreanTts
 import com.kakao.vectormap.KakaoMap
 import com.kakao.vectormap.KakaoMapReadyCallback
 import com.kakao.vectormap.LatLng
 import com.kakao.vectormap.MapLifeCycleCallback
 import com.kakao.vectormap.MapView
 import com.kakao.vectormap.camera.CameraUpdateFactory
+import com.kakao.vectormap.label.Label
 import com.kakao.vectormap.label.LabelLayer
 import com.kakao.vectormap.label.LabelManager
 import com.kakao.vectormap.label.LabelOptions
@@ -71,6 +83,9 @@ private const val DemoZoom = 12
 
 /** 경로 화살표 반복 간격(픽셀). 클수록 화살표가 드물게 찍힌다. */
 private const val ArrowSpacing = 64f
+
+/** 길안내 중 카메라 줌 레벨. */
+private const val NavZoom = 16
 
 @Composable
 fun MapRouteScreen(
@@ -133,6 +148,36 @@ fun MapRouteScreen(
         drawPreview(map, uiState.preview, uiState.resolvedStart, uiState.resolvedEnd, context)
     }
 
+    // 내비게이션 안내 TTS: ViewModel 이벤트를 큐로 발화.
+    val tts = rememberKoreanTts()
+    LaunchedEffect(Unit) {
+        viewModel.ttsEvents.collect { tts.speak(it, flush = false) }
+    }
+
+    // 내 위치 마커 + 카메라 추적(내비 중 userLocation 갱신마다).
+    val userLabel = remember { mutableStateOf<Label?>(null) }
+    LaunchedEffect(kakaoMapState.value, uiState.userLocation) {
+        val map = kakaoMapState.value ?: return@LaunchedEffect
+        val layer = map.labelManager?.layer
+        runCatching { userLabel.value?.let { layer?.remove(it) } }
+        userLabel.value = null
+        val loc = uiState.userLocation ?: return@LaunchedEffect
+        val mgr = map.labelManager ?: return@LaunchedEffect
+        val styles = mgr.addLabelStyles(
+            LabelStyles.from(LabelStyle.from(context.rasterize(R.drawable.ic_user_dot))),
+        )
+        val position = LatLng.from(loc.latitude, loc.longitude)
+        userLabel.value = layer?.addLabel(LabelOptions.from(position).setStyles(styles))
+        map.moveCamera(CameraUpdateFactory.newCenterPosition(position, NavZoom))
+    }
+
+    // 실제 GPS 브리지: 내비 중 + RealGps 모드일 때만 위치 수신(서버 전송 없음).
+    RealGpsBridge(
+        active = uiState.navState == NavigationState.NavigatingPlaceholder &&
+            uiState.navMode == NavMode.RealGps,
+        onLocation = viewModel::onRealLocation,
+    )
+
     Box(modifier = modifier.fillMaxSize()) {
         AndroidView(factory = { mapView }, modifier = Modifier.fillMaxSize())
 
@@ -179,6 +224,9 @@ fun MapRouteScreen(
                 modifier = bottomModifier,
             )
             NavigationState.NavigatingPlaceholder -> NavigatingBar(
+                uiState = uiState,
+                onToggleMode = viewModel::setNavMode,
+                onProgress = viewModel::updateSimulatedProgress,
                 onStop = viewModel::stopNavigation,
                 modifier = bottomModifier,
             )
@@ -396,6 +444,9 @@ private fun RoutePreviewBar(
 
 @Composable
 private fun NavigatingBar(
+    uiState: MapRouteUiState,
+    onToggleMode: (NavMode) -> Unit,
+    onProgress: (Float) -> Unit,
     onStop: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -404,15 +455,96 @@ private fun NavigatingBar(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(text = "길안내 모드", style = MaterialTheme.typography.titleMedium)
+            // 현재 안내(음성과 동일 문구) — 크게
             Text(
-                text = "경로를 따라 이동하세요. 상세 턴바이턴 안내는 준비 중입니다.",
-                style = MaterialTheme.typography.bodySmall,
+                text = uiState.navInstruction.ifBlank { "경로를 따라 이동하세요." },
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary,
             )
-            Button(onClick = onStop) { Text(text = "길안내 종료") }
+
+            // 실제 GPS / 모의(슬라이더) 전환
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = uiState.navMode == NavMode.Simulated,
+                    onClick = { onToggleMode(NavMode.Simulated) },
+                    label = { Text(text = "모의(슬라이더)") },
+                )
+                FilterChip(
+                    selected = uiState.navMode == NavMode.RealGps,
+                    onClick = { onToggleMode(NavMode.RealGps) },
+                    label = { Text(text = "실제 GPS") },
+                )
+            }
+
+            if (uiState.navMode == NavMode.Simulated) {
+                Text(
+                    text = "슬라이더로 경로를 따라 이동해 보세요.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Slider(
+                    value = uiState.navProgress,
+                    onValueChange = onProgress,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            } else {
+                Text(
+                    text = "실제 GPS 위치를 따라갑니다. 위치는 기기에서만 사용하며 서버로 전송하지 않습니다.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+
+            Button(onClick = onStop, modifier = Modifier.fillMaxWidth()) {
+                Text(text = "길안내 종료")
+            }
         }
+    }
+}
+
+/** 실제 GPS 위치 수신 브리지(LocationManager). 좌표는 서버로 전송하지 않는다. */
+@Composable
+private fun RealGpsBridge(
+    active: Boolean,
+    onLocation: (Double, Double) -> Unit,
+) {
+    val context = LocalContext.current
+    val granted = remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
+                PackageManager.PERMISSION_GRANTED,
+        )
+    }
+    val launcher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { ok -> granted.value = ok }
+
+    LaunchedEffect(active) {
+        if (active && !granted.value) launcher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+    }
+
+    DisposableEffect(active, granted.value) {
+        if (!active || !granted.value) return@DisposableEffect onDispose {}
+        val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+        val listener = object : LocationListener {
+            override fun onLocationChanged(location: Location) {
+                onLocation(location.latitude, location.longitude)
+            }
+
+            @Deprecated("deprecated in API 29")
+            override fun onStatusChanged(provider: String?, status: Int, extras: android.os.Bundle?) = Unit
+            override fun onProviderEnabled(provider: String) = Unit
+            override fun onProviderDisabled(provider: String) = Unit
+        }
+        try {
+            lm?.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 1f, listener)
+            if (lm?.isProviderEnabled(LocationManager.NETWORK_PROVIDER) == true) {
+                lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 2000L, 5f, listener)
+            }
+        } catch (_: SecurityException) {
+        }
+        onDispose { lm?.removeUpdates(listener) }
     }
 }
 

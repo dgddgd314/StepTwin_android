@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.steptwin.data.favorites.FavoritesStore
 import com.example.steptwin.domain.favorites.FavoriteRoute
+import com.example.steptwin.domain.nav.NavMode
+import com.example.steptwin.domain.nav.NavPath
 import com.example.steptwin.domain.preview.GeoPoint
 import com.example.steptwin.domain.preview.NamedPlace
 import com.example.steptwin.domain.preview.PlaceSuggestion
@@ -14,8 +16,11 @@ import com.example.steptwin.domain.repository.TugRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -41,6 +46,12 @@ class MapRouteViewModel @Inject constructor(
     private var lastDestination: NamedPlace? = null
     private var startSuggestJob: Job? = null
     private var endSuggestJob: Job? = null
+
+    // ---- 내비게이션 세션 ----
+    private var navPath: NavPath? = null
+    private val announcedCues = mutableSetOf<String>()
+    private val _ttsEvents = MutableSharedFlow<String>(extraBufferCapacity = 16)
+    val ttsEvents: SharedFlow<String> = _ttsEvents.asSharedFlow()
 
     init {
         // "내 보행정보"에서 고른 즐겨찾기를 이어받아 자동으로 길찾기 실행.
@@ -239,21 +250,72 @@ class MapRouteViewModel @Inject constructor(
         search()
     }
 
-    // ---- 길안내(placeholder) ----
-    fun startNavigation() = _uiState.update {
-        if (it.navState == NavigationState.RoutePreviewShown) {
-            it.copy(navState = NavigationState.NavigatingPlaceholder)
-        } else {
-            it
+    // ---- 길안내(GPS/모의) ----
+    fun startNavigation() {
+        val preview = _uiState.value.preview ?: return
+        val path = NavPath.from(preview)
+        navPath = path
+        announcedCues.clear()
+        _uiState.update {
+            it.copy(
+                navState = NavigationState.NavigatingPlaceholder,
+                navMode = NavMode.Simulated,
+                navProgress = 0f,
+                navInstruction = "경로를 따라 이동하세요.",
+                userLocation = path?.pointAt(0.0),
+            )
+        }
+        if (path != null) advance(0.0)
+    }
+
+    fun stopNavigation() {
+        navPath = null
+        announcedCues.clear()
+        _uiState.update {
+            if (it.navState == NavigationState.NavigatingPlaceholder) {
+                it.copy(
+                    navState = NavigationState.RoutePreviewShown,
+                    userLocation = null,
+                    navProgress = 0f,
+                )
+            } else {
+                it
+            }
         }
     }
 
-    fun stopNavigation() = _uiState.update {
-        if (it.navState == NavigationState.NavigatingPlaceholder) {
-            it.copy(navState = NavigationState.RoutePreviewShown)
-        } else {
-            it
+    fun setNavMode(mode: NavMode) = _uiState.update { it.copy(navMode = mode) }
+
+    /** 모의 GPS: 슬라이더(0~1) 진행. */
+    fun updateSimulatedProgress(fraction: Float) {
+        val path = navPath ?: return
+        val f = fraction.coerceIn(0f, 1f)
+        _uiState.update { it.copy(navProgress = f) }
+        advance(f * path.totalDistance)
+    }
+
+    /** 실제 GPS: 위치를 경로에 투영해 진행. 좌표는 서버로 전송하지 않는다. */
+    fun onRealLocation(latitude: Double, longitude: Double) {
+        if (_uiState.value.navMode != NavMode.RealGps) return
+        val path = navPath ?: return
+        val dist = path.project(GeoPoint(latitude, longitude))
+        val f = if (path.totalDistance > 0) (dist / path.totalDistance).toFloat().coerceIn(0f, 1f) else 0f
+        _uiState.update { it.copy(navProgress = f) }
+        advance(dist)
+    }
+
+    /** 진행거리(m)에서 아직 발화하지 않은 안내 큐를 실행하고 위치/배너를 갱신. */
+    private fun advance(distance: Double) {
+        val path = navPath ?: return
+        val fired = path.cues
+            .filter { it.triggerDistance <= distance && it.id !in announcedCues }
+            .sortedBy { it.triggerDistance }
+        for (cue in fired) {
+            announcedCues += cue.id
+            _ttsEvents.tryEmit(cue.speak)
         }
+        val banner = fired.lastOrNull()?.banner ?: _uiState.value.navInstruction
+        _uiState.update { it.copy(userLocation = path.pointAt(distance), navInstruction = banner) }
     }
 
     private companion object {
@@ -277,6 +339,10 @@ data class MapRouteUiState(
     val statusMessage: String? = null,
     val isError: Boolean = false,
     val favoriteSaved: Boolean = false,
+    val navMode: NavMode = NavMode.Simulated,
+    val navProgress: Float = 0f,
+    val navInstruction: String = "",
+    val userLocation: GeoPoint? = null,
 ) {
     val canNavigate: Boolean = navState == NavigationState.RoutePreviewShown &&
         (preview?.segments?.isNotEmpty() == true)

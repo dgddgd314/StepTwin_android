@@ -58,7 +58,11 @@ fun ConsentScreen(
             body = "지도 표시와 경로 검색(카카오 지도/로컬 API)에 사용됩니다.",
         )
         ConsentItem(
-            title = "④ 의료 목적 아님",
+            title = "④ 실시간 위치 (GPS)",
+            body = "길안내 중에만 기기 내부에서 사용하며 서버로 전송하지 않습니다.",
+        )
+        ConsentItem(
+            title = "⑤ 의료 목적 아님",
             body = "본 앱의 결과(취약도·낙상위험 등급)는 참고용이며 의료 진단이 아닙니다.",
         )
 
