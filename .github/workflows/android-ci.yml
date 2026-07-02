@@ -39,8 +39,18 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x ./gradlew
 
-      # Kakao 앱키/서버주소는 local.properties 에서 읽으며, CI 에는 없으므로
-      # 빈 값으로 폴백된다(빌드는 성공, 런타임 지도 인증만 비활성). 시크릿 불필요.
+      # local.properties 는 커밋하지 않으므로(비밀키 포함) GitHub Secrets 값으로 생성한다.
+      # sdk.dir 은 넣지 않는다 — setup-android 가 ANDROID_HOME 을 설정해준다.
+      # Secrets 미설정 시 빈 값/기본값으로 폴백(빌드는 성공, 런타임 지도·서버만 비활성).
+      - name: Create local.properties from secrets
+        run: |
+          {
+            echo "KAKAO_NATIVE_APP_KEY=${{ secrets.KAKAO_NATIVE_APP_KEY }}"
+            echo "KAKAO_REST_API_KEY=${{ secrets.KAKAO_REST_API_KEY }}"
+            echo "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}"
+            echo "SERVER_BASE_URL=${{ secrets.SERVER_BASE_URL }}"
+          } > local.properties
+
       - name: Build debug & run unit tests
         run: ./gradlew --stacktrace --no-daemon assembleDebug testDebugUnitTest
 

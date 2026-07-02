@@ -25,7 +25,9 @@ val kakaoRestApiKey: String = localProperties.getProperty("KAKAO_REST_API_KEY") 
 val anthropicApiKey: String = localProperties.getProperty("ANTHROPIC_API_KEY") ?: ""
 
 // 데모 서버 주소. 폰에서 접속 가능한 호스트 IP 를 local.properties 로 덮어쓸 수 있다.
-val serverBaseUrl: String = localProperties.getProperty("SERVER_BASE_URL") ?: "http://172.30.1.66:8000/"
+// 빈 문자열(CI 시크릿 미설정 등)이면 기본값으로 폴백 — Retrofit baseUrl 크래시 방지.
+val serverBaseUrl: String = localProperties.getProperty("SERVER_BASE_URL")
+    ?.takeIf { it.isNotBlank() } ?: "http://172.30.1.66:8000/"
 
 android {
     namespace = "com.example.steptwin"
