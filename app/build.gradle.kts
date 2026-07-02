@@ -29,6 +29,14 @@ val anthropicApiKey: String = localProperties.getProperty("ANTHROPIC_API_KEY") ?
 val serverBaseUrl: String = localProperties.getProperty("SERVER_BASE_URL")
     ?.takeIf { it.isNotBlank() } ?: "http://172.30.1.66:8000/"
 
+// release 서명. 값은 환경변수(CI) 또는 local.properties 에서 읽는다(둘 다 커밋 안 함).
+// keystore 파일이 있을 때만 서명하고, 없으면 unsigned release 로 빌드(빌드는 성공).
+fun signingValue(key: String): String? =
+    System.getenv(key) ?: localProperties.getProperty(key)?.takeIf { it.isNotBlank() }
+
+val releaseStoreFile: String? = signingValue("RELEASE_STORE_FILE")
+val hasReleaseSigning: Boolean = releaseStoreFile != null && file(releaseStoreFile).exists()
+
 android {
     namespace = "com.example.steptwin"
     compileSdk {
@@ -52,8 +60,22 @@ android {
         buildConfigField("String", "SERVER_BASE_URL", "\"$serverBaseUrl\"")
     }
 
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(releaseStoreFile!!)
+                storePassword = signingValue("RELEASE_STORE_PASSWORD")
+                keyAlias = signingValue("RELEASE_KEY_ALIAS")
+                keyPassword = signingValue("RELEASE_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             optimization {
                 enable = false
             }

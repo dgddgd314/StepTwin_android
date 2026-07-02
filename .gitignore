@@ -14,3 +14,7 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# 서명 keystore (커밋 금지)
+*.keystore
+*.jks
