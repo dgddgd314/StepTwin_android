@@ -29,7 +29,6 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
@@ -41,11 +40,21 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
@@ -255,7 +264,6 @@ fun MapRouteScreen(
                     uiState = uiState,
                     onToggle = viewModel::toggleAssistant,
                     onMic = onMic,
-                    onQuickAsk = viewModel::quickAsk,
                 )
                 NavigatingBar(
                     uiState = uiState,
@@ -483,7 +491,6 @@ private fun AssistantPanel(
     uiState: MapRouteUiState,
     onToggle: () -> Unit,
     onMic: () -> Unit,
-    onQuickAsk: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Card(modifier = modifier.fillMaxWidth()) {
@@ -529,30 +536,11 @@ private fun AssistantPanel(
                 style = MaterialTheme.typography.bodyLarge,
             )
 
-            Button(
-                onClick = onMic,
-                enabled = !uiState.assistantListening,
+            MicButton(
+                listening = uiState.assistantListening,
+                onMic = onMic,
                 modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(text = if (uiState.assistantListening) "🎤 듣는 중..." else "🎤 말하기")
-            }
-
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { onQuickAsk("where") }, modifier = Modifier.weight(1f)) {
-                    Text(text = "어디에요?")
-                }
-                OutlinedButton(onClick = { onQuickAsk("left") }, modifier = Modifier.weight(1f)) {
-                    Text(text = "얼마 남았죠?")
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { onQuickAsk("confirm") }, modifier = Modifier.weight(1f)) {
-                    Text(text = "잘 가나요?")
-                }
-                OutlinedButton(onClick = { onQuickAsk("repeat") }, modifier = Modifier.weight(1f)) {
-                    Text(text = "다시요")
-                }
-            }
+            )
 
             if (!uiState.assistantHasKey) {
                 Text(
@@ -562,6 +550,57 @@ private fun AssistantPanel(
                 )
             }
         }
+    }
+}
+
+/**
+ * 큰 원형 "말하기" 버튼 + "누르고 말해주세요" 넛지.
+ * 대기 중에는 은은하게 커졌다 작아지며(맥동) 누름을 유도하고, 듣는 중에는 멈춘다.
+ */
+@Composable
+private fun MicButton(
+    listening: Boolean,
+    onMic: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val transition = rememberInfiniteTransition(label = "mic-pulse")
+    val pulse by transition.animateFloat(
+        initialValue = 1f,
+        targetValue = 1.08f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 800),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "mic-scale",
+    )
+    val scale = if (listening) 1f else pulse
+    val circleColor = if (listening) {
+        MaterialTheme.colorScheme.secondary
+    } else {
+        MaterialTheme.colorScheme.primary
+    }
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(120.dp)
+                .scale(scale)
+                .clip(CircleShape)
+                .background(circleColor)
+                .clickable(enabled = !listening, onClick = onMic),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(text = "🎤", fontSize = 52.sp)
+        }
+        Text(
+            text = if (listening) "듣고 있어요…" else "누르고 말해주세요",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary,
+        )
     }
 }
 

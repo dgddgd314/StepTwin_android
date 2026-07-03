@@ -372,18 +372,6 @@ class MapRouteViewModel @Inject constructor(
         }
     }
 
-    /** 빠른 질문 버튼(경로 맥락에서 즉답, API 미사용). */
-    fun quickAsk(kind: String) {
-        val answer = when (kind) {
-            "where" -> "지금 '${currentInstr()}' 안내를 따라 가고 계세요."
-            "left" -> "목적지까지 약 ${remainingMeters()}미터 남았어요."
-            "confirm" -> "네, 잘 가고 계세요. 걱정 마세요."
-            "repeat" -> currentInstr()
-            else -> "네, 말씀하세요."
-        }
-        respond(answer)
-    }
-
     private fun respond(text: String) {
         _uiState.update { it.copy(assistantThinking = false, assistantCaption = text) }
         _ttsEvents.tryEmit(Utterance(text, natural = true))
@@ -414,15 +402,32 @@ class MapRouteViewModel @Inject constructor(
     }
 
     private fun buildSystemPrompt(): String {
+        val origin = lastOrigin?.name ?: "현재 위치"
         val dest = lastDestination?.name ?: "목적지"
         val transit = _uiState.value.preview?.segments
             ?.mapNotNull { it.transit?.lineLabel }?.distinct()?.joinToString(", ").orEmpty()
         return "당신은 어르신과 대화하며 ${dest}까지 도보 길안내를 돕는 다정한 AI 말벗입니다. " +
             "존댓말로, 한 번에 한두 문장만, 짧고 쉽게 말하세요. " +
-            "현재 안내: '${currentInstr()}'. 목적지까지 약 ${remainingMeters()}미터 남음. " +
+            "[경로] 출발 '$origin' → 도착 '$dest'. 현재 안내: '${currentInstr()}'. " +
+            "목적지까지 약 ${remainingMeters()}미터 남음. " +
             (if (transit.isNotBlank()) "이용 대중교통: $transit. " else "") +
+            "[사용자] ${userProfileLine()} " +
             "지도에 없는 실제 지형(가게 이름, 신호등 개수 등)은 지어내지 말고, 모르면 다정하게 모른다고 하세요. " +
             "다치거나 위험하다고 하면 침착히 안심시키고 보호자에게 연락하겠다고 하세요."
+    }
+
+    /** 챗봇에 전달할 사용자 보행 취약도 요약(0~100, 높을수록 취약). 앱이 아는 유일한 개인 특성. */
+    private fun userProfileLine(): String {
+        val w = tugRepository.latestWeights.value
+        val untested = w == null ||
+            (w.speedWeight <= 0f && w.turnWeight <= 0f && w.strengthWeight <= 0f)
+        if (untested) {
+            return "아직 보행검사를 하지 않아 취약도 정보가 없는 어르신입니다. 일반적인 주의로 안내하세요."
+        }
+        fun pct(v: Float) = (v.coerceIn(0f, 1f) * 100).toInt()
+        return "이 어르신의 보행 취약도 — 걷는 속도 ${pct(w.speedWeight)}, " +
+            "방향전환(회전) ${pct(w.turnWeight)}, 다리 근력 ${pct(w.strengthWeight)}. " +
+            "취약도가 높은 항목은 특히 천천히·자주 안심시키며 배려해 안내하세요."
     }
 
     private companion object {
