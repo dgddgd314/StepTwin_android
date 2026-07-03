@@ -86,7 +86,10 @@ fun TugMeasureScreen(
             TugMeasureStatus.Baseline ->
                 speaker.speak("잠시 가만히 계세요. 기준을 측정합니다.")
             TugMeasureStatus.Recording ->
-                speaker.speak("시작하세요. 일어나서 삼 미터 걷고, 돌아서 제자리로 돌아와 앉으세요.")
+                speaker.speak(
+                    "시작하세요. 먼저 천천히 일어서세요. 일어선 다음 한두 걸음 걷지 말고 " +
+                        "그 자리에 잠시 멈추세요. 그리고 삼 미터 걷고, 돌아서 제자리로 돌아와 앉으세요.",
+                )
             TugMeasureStatus.Complete -> {
                 val m = uiState.metrics
                 if (m != null) {
@@ -162,15 +165,18 @@ private fun IdleIntro(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             TugStepText("① 의자에 앉은 상태로 시작")
-            TugStepText("② 일어서기")
-            TugStepText("③ 3m 앞으로 걷기")
-            TugStepText("④ 돌아서기(180° 회전)")
-            TugStepText("⑤ 3m 되돌아오기")
-            TugStepText("⑥ 다시 앉기")
+            TugStepText("② 천천히 일어서기")
+            TugStepText("③ 일어선 채로 잠시 멈추기 (1~2초)")
+            TugStepText("④ 3m 앞으로 걷기")
+            TugStepText("⑤ 돌아서기(180° 회전)")
+            TugStepText("⑥ 3m 되돌아오기")
+            TugStepText("⑦ 다시 앉기")
         }
     }
     Text(
         text = "폰을 몸(주머니·허리)에 지닌 채 앉아서 시작 버튼을 누르고, 안내대로 수행하세요. " +
+            "특히 일어선 직후에는 바로 걷지 말고 1~2초 그 자리에 멈춘 뒤 걸으세요 — " +
+            "일어서는 동작(몸이 앞으로 쏠림)이 보행으로 잘못 잡히지 않게 하기 위함입니다. " +
             "앉으면 자동으로 종료되고 총 소요 시간과 AI 분석 결과가 표시됩니다.",
         style = MaterialTheme.typography.bodySmall,
     )
