@@ -364,34 +364,85 @@ class MapRouteViewModel @Inject constructor(
         it.copy(awaitingDestination = false, assistantActive = false, assistantListening = false)
     }
 
-    /** 음성으로 받은 문장에서 목적지를 뽑아, 출발지=GPS 현위치로 길찾기를 실행한다. */
+    /**
+     * 음성 발화에서 출발지/도착지를 뽑아 길찾기를 실행한다.
+     * "A부터/에서 B까지"처럼 출발지를 말하면 그대로, 없으면 GPS 현위치를 출발지로 쓴다.
+     */
     private fun handleDestinationSpeech(text: String) {
-        val place = parseDestination(text)
-        // 출발지: GPS 현재 위치가 있으면 그것을, 없으면 기존 출발지 검색어로 폴백.
-        val gps = currentGps
-        if (gps != null) {
-            selectedStart = NamedPlace("현재 위치", gps)
-            _uiState.update { it.copy(startQuery = "현재 위치", resolvedStart = gps) }
-        }
+        val (origin, dest) = parseRoute(text)
         selectedEnd = null
-        _uiState.update {
-            it.copy(
-                endQuery = place,
-                assistantCaption = "‘$place’(으)로 길을 찾아볼게요.",
-                assistantListening = false,
+
+        if (origin != null) {
+            // 출발지도 말로 지정 → 지오코딩으로 찾도록 검색어만 세팅.
+            selectedStart = null
+            _uiState.update {
+                it.copy(
+                    startQuery = origin,
+                    endQuery = dest,
+                    resolvedStart = null,
+                    assistantCaption = "‘$origin’에서 ‘$dest’까지 길을 찾아볼게요.",
+                    assistantListening = false,
+                )
+            }
+            _ttsEvents.tryEmit(
+                Utterance("$origin 에서 $dest 까지 길을 찾아볼게요. 잠시만요.", natural = true),
+            )
+        } else {
+            // 출발지 표현 없음 → GPS 현재 위치(있으면)로.
+            val gps = currentGps
+            if (gps != null) {
+                selectedStart = NamedPlace("현재 위치", gps)
+                _uiState.update { it.copy(startQuery = "현재 위치", resolvedStart = gps) }
+            }
+            _uiState.update {
+                it.copy(
+                    endQuery = dest,
+                    assistantCaption = "‘$dest’(으)로 길을 찾아볼게요.",
+                    assistantListening = false,
+                )
+            }
+            _ttsEvents.tryEmit(
+                Utterance("$dest. 지금 위치에서 길을 찾아볼게요. 잠시만요.", natural = true),
             )
         }
-        _ttsEvents.tryEmit(Utterance("$place. 지금 위치에서 길을 찾아볼게요. 잠시만요.", natural = true))
         search()
     }
 
     /**
-     * "○○ 가고 싶어요"류 발화에서 장소명만 남긴다. 뒤에 붙는 이동 의도 표현/조사만 제거하고,
-     * 종로·을지로처럼 '로'로 끝나는 지명을 훼손하지 않도록 단독 조사는 함부로 자르지 않는다.
+     * 발화에서 (출발지, 도착지)를 추출. 출발지 표현(부터/에서)이 없으면 출발지는 null.
+     * 뒤에 붙는 이동 의도 표현과 조사만 제거하고, 종로·을지로처럼 '로'로 끝나는 지명은 지킨다.
      */
-    private fun parseDestination(raw: String): String {
+    private fun parseRoute(raw: String): Pair<String?, String> {
+        val core = stripIntentTail(raw)
+        // '여기/현위치'류를 뜻하는 출발지 → GPS 로(지오코딩하지 않음).
+        val hereWords = setOf(
+            "여기", "여기서", "여기에서", "현재위치", "현재 위치", "현위치",
+            "지금위치", "지금 위치", "내위치", "내 위치", "이곳", "이곳에서",
+        )
+        // "여기서 ○○까지"처럼 lone '서' 접미 케이스 먼저 처리.
+        for (h in listOf("여기서부터", "여기에서부터", "여기서", "여기에서", "이곳에서")) {
+            if (core.startsWith(h)) {
+                val dest = stripDestTail(core.removePrefix(h).trim())
+                if (dest.isNotBlank()) return null to dest
+            }
+        }
+        // 출발지 마커: "에서부터" > "부터" > "에서" 순으로 탐색.
+        for (marker in listOf("에서부터", "부터", "에서")) {
+            val idx = core.indexOf(marker)
+            if (idx > 0) {
+                val origin = core.substring(0, idx).trim()
+                val dest = stripDestTail(core.substring(idx + marker.length).trim())
+                if (dest.isBlank()) continue
+                return if (origin.isBlank() || origin in hereWords) null to dest
+                else origin to dest
+            }
+        }
+        return null to stripDestTail(core).ifBlank { core }
+    }
+
+    /** 뒤쪽 이동 의도 표현(선행 조사 포함)만 제거. */
+    private fun stripIntentTail(raw: String): String {
         var s = raw.trim()
-        // 뒤쪽 이동 의도 표현(선행 조사 포함)만 제거.
         val tailPatterns = listOf(
             Regex("""(으로|로|에|까지|를|을)?\s*가고\s*싶어요?$"""),
             Regex("""(으로|로|에|까지|를|을)?\s*가고\s*싶다$"""),
@@ -420,6 +471,13 @@ class MapRouteViewModel @Inject constructor(
                 }
             }
         }
+        return s.ifBlank { raw.trim() }
+    }
+
+    /** 도착지 꼬리 조사 제거: '까지'만 안전하게 떼고, '로'로 끝나는 지명은 건드리지 않는다. */
+    private fun stripDestTail(raw: String): String {
+        var s = raw.trim()
+        if (s.endsWith("까지")) s = s.removeSuffix("까지").trim()
         return s.ifBlank { raw.trim() }
     }
 

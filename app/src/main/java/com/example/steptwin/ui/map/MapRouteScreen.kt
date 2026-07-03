@@ -534,7 +534,7 @@ private fun VoiceDestinationPanel(
                 TextButton(onClick = onCancel) { Text(text = "취소") }
             }
             Text(
-                text = "출발: 현재 위치(GPS)",
+                text = "출발: 현재 위치(GPS) · ‘○○에서’라고 말하면 출발지도 바꿔요",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -548,7 +548,7 @@ private fun VoiceDestinationPanel(
                 modifier = Modifier.fillMaxWidth(),
             )
             Text(
-                text = "도착지 이름만 또렷이 말씀해 주세요. 예: “회기역”, “경희의료원”",
+                text = "예: “경희의료원”  또는  “회기역에서 경희의료원까지”",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
