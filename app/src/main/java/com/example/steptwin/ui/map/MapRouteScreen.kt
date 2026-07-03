@@ -19,6 +19,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -27,6 +28,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -40,6 +42,12 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -281,24 +289,56 @@ fun MapRouteScreen(
                 onSaveFavorite = viewModel::saveFavorite,
                 modifier = bottomModifier,
             )
-            uiState.navState == NavigationState.NavigatingPlaceholder -> Column(
-                modifier = bottomModifier,
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+            else -> Unit
+        }
+
+        // 길안내 중: 말벗(위) + 길안내 바(아래)를 분리 배치해 가운데로 지도를 노출.
+        // '지도 크게' 토글로 두 박스를 위/아래로 슬라이드해 접었다 다시 펼친다.
+        if (uiState.navState == NavigationState.NavigatingPlaceholder) {
+            var mapExpanded by remember { mutableStateOf(false) }
+            val panelModifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp)
+
+            AnimatedVisibility(
+                visible = !mapExpanded,
+                modifier = Modifier.align(Alignment.TopCenter),
+                enter = slideInVertically { -it } + fadeIn(),
+                exit = slideOutVertically { -it } + fadeOut(),
             ) {
                 AssistantPanel(
                     uiState = uiState,
                     onToggle = viewModel::toggleAssistant,
                     onMic = onMic,
+                    modifier = panelModifier,
                 )
+            }
+
+            AnimatedVisibility(
+                visible = !mapExpanded,
+                modifier = Modifier.align(Alignment.BottomCenter),
+                enter = slideInVertically { it } + fadeIn(),
+                exit = slideOutVertically { it } + fadeOut(),
+            ) {
                 NavigatingBar(
                     uiState = uiState,
                     onToggleMode = viewModel::setNavMode,
                     onProgress = viewModel::updateSimulatedProgress,
                     onStop = viewModel::stopNavigation,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = panelModifier,
                 )
             }
-            else -> Unit
+
+            // 접기/펼치기 토글(항상 보임) — 지도를 크게 보거나 안내를 다시 펼친다.
+            FilledTonalButton(
+                onClick = { mapExpanded = !mapExpanded },
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .padding(8.dp),
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+            ) {
+                Text(text = if (mapExpanded) "▲ 안내 보기" else "🗺 지도 크게")
+            }
         }
     }
 }
@@ -583,8 +623,8 @@ private fun AssistantPanel(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -668,18 +708,18 @@ private fun MicButton(
     Column(
         modifier = modifier,
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Box(
             modifier = Modifier
-                .size(120.dp)
+                .size(92.dp)
                 .scale(scale)
                 .clip(CircleShape)
                 .background(circleColor)
                 .clickable(enabled = !listening, onClick = onMic),
             contentAlignment = Alignment.Center,
         ) {
-            Text(text = "🎤", fontSize = 52.sp)
+            Text(text = "🎤", fontSize = 40.sp)
         }
         Text(
             text = if (listening) "듣고 있어요…" else "누르고 말해주세요",
