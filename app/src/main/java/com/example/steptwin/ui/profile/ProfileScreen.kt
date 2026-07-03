@@ -54,8 +54,8 @@ fun ProfileScreen(
         val untested = weights == null ||
             (weights.speedWeight == 0f && weights.turnWeight == 0f && weights.strengthWeight == 0f)
         if (untested) {
-            Text(text = "아직 보행 검사를 하지 않았습니다. 세 취약도(속도·회전·근력)는 모두 0입니다.")
-            WeightVectorSummary(weights = weights ?: TugWeights.zero())
+            Text(text = "아직 보행 검사를 하지 않았습니다. 검사하면 속도지수·회전지수·근력지수가 계산됩니다.")
+            WeightVectorSummary(weights = weights ?: TugWeights.zero(), tested = false)
         } else {
             Text(text = "최근 검사에서 계산된 개인 보행 프로필입니다.")
             WeightVectorSummary(weights = weights)
@@ -106,6 +106,23 @@ fun ProfileScreen(
         ) {
             Text(text = "개인정보 동의 철회 (앱 초기화)")
         }
+
+        Text(
+            text = "이용자의 보행정보는 성명, 연락처 등 직접 식별정보와 분리하여 개인을 바로 알아볼 수 " +
+                "없도록 가명처리하거나 통계화한 뒤 활용합니다. 처리된 정보는 향후 협약을 체결한 국가기관, " +
+                "지방자치단체, 공공기관 및 연구기관과의 협력을 통해 보행 위험구간을 분석하고, " +
+                "횡단보도·보행신호·보도·경사로 등 보행안전시설을 개선하며, 고령자 보행안전 정책과 " +
+                "이동지원 사업을 수립하기 위한 자료로 제공될 수 있습니다. 제공되는 항목은 보행 속도, " +
+                "방향 전환 안정도, 하체 지지 안정도, 이동 경로와 시간대, 경사·계단·횡단보도 등 경로 " +
+                "환경정보 및 연령대 등 분석에 필요한 최소한의 정보로 제한되며, 성명이나 전화번호 등 " +
+                "개인을 직접 식별할 수 있는 정보는 제공하지 않습니다. 정보는 제공일로부터 최대 5년 또는 " +
+                "해당 연구·정책사업의 목적이 달성될 때까지 보유한 후 안전하게 파기합니다. 본 동의는 " +
+                "선택사항으로, 동의하지 않더라도 보행검사와 개인 맞춤형 경로안내 등 기본 서비스 이용에는 " +
+                "불이익이 없으며, 동의 후에도 언제든지 철회할 수 있습니다. 다만 이미 익명화되거나 " +
+                "통계자료로 생성되어 개인을 구분할 수 없는 정보는 철회 대상에서 제외될 수 있습니다.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 
     if (showClearDialog) {
@@ -186,10 +203,10 @@ private fun ConfirmDialog(
 private fun profileAdvice(speed: Float, turn: Float, strength: Float): String {
     return when {
         strength >= turn && strength >= speed ->
-            "근력 취약도가 가장 높아 계단, 턱, 급한 경사가 있는 구간의 비용을 크게 올립니다."
+            "근력지수가 가장 낮아 계단, 턱, 급한 경사가 있는 구간의 비용을 크게 올립니다."
         turn >= speed ->
-            "회전 취약도가 가장 높아 복잡한 골목과 방향 전환이 잦은 구간의 비용을 크게 올립니다."
+            "회전지수가 가장 낮아 복잡한 골목과 방향 전환이 잦은 구간의 비용을 크게 올립니다."
         else ->
-            "속도 취약도가 가장 높아 긴 거리와 좁은 보도 부담을 함께 줄이는 경로를 우선합니다."
+            "속도지수가 가장 낮아 긴 거리와 좁은 보도 부담을 함께 줄이는 경로를 우선합니다."
     }
 }

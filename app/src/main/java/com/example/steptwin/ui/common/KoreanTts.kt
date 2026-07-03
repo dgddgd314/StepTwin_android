@@ -31,6 +31,11 @@ class KoreanTts(context: Context) {
         e.speak(text, mode, null, text.hashCode().toString())
     }
 
+    /** 진행 중 발화만 중단(엔진은 유지). */
+    fun stop() {
+        engine?.stop()
+    }
+
     fun shutdown() {
         engine?.stop()
         engine?.shutdown()
