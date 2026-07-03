@@ -1,7 +1,6 @@
 package com.example.steptwin.ui
 
 import android.content.Context
-import android.content.Intent
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -84,6 +83,9 @@ fun StepTwinApp() {
         }
 
         var currentDestination by rememberSaveable { mutableStateOf(AppDestination.Home) }
+        // 맵/길찾기 VM 은 상위에서 한 번만 만들어(액티비티 스코프) 홈의 '전화 걸기'가 음성 목적지
+        // 입력을 트리거할 수 있게 공유한다.
+        val mapViewModel: MapRouteViewModel = hiltViewModel()
 
         Scaffold(
             topBar = {
@@ -135,8 +137,9 @@ fun StepTwinApp() {
                     HomeScreen(
                         onOpenMap = { currentDestination = AppDestination.Route },
                         onCall = {
-                            // 전화 앱(다이얼러)을 연다. CALL_PHONE 권한 없이 안전하게 동작.
-                            context.startActivity(Intent(Intent.ACTION_DIAL))
+                            // 전화 대신 '말벗 대화'로 이동해 목적지를 말로 받아 길찾기한다.
+                            mapViewModel.startVoiceDestination()
+                            currentDestination = AppDestination.Route
                         },
                         modifier = contentModifier,
                     )
@@ -148,8 +151,7 @@ fun StepTwinApp() {
                 }
 
                 AppDestination.Route -> {
-                    val viewModel: MapRouteViewModel = hiltViewModel()
-                    MapRouteScreen(viewModel = viewModel, modifier = contentModifier)
+                    MapRouteScreen(viewModel = mapViewModel, modifier = contentModifier)
                 }
 
                 AppDestination.Profile -> {

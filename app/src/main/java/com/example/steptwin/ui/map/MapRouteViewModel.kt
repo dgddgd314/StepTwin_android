@@ -158,6 +158,7 @@ class MapRouteViewModel @Inject constructor(
                     origin == null -> "출발지"
                     else -> "도착지"
                 }
+                val wasVoice = _uiState.value.awaitingDestination
                 _uiState.update {
                     it.copy(
                         isLoading = false,
@@ -168,6 +169,14 @@ class MapRouteViewModel @Inject constructor(
                         resolvedEnd = destination?.point ?: it.resolvedEnd,
                         statusMessage = "$missing 장소를 찾지 못했습니다. 검색어를 확인하세요.",
                         isError = true,
+                        // 음성 입력이 실패하면 모드를 끄고 검색 패널을 열어 직접 수정하게 한다.
+                        awaitingDestination = false,
+                        panelState = if (wasVoice) RoutePanelState.Open else it.panelState,
+                    )
+                }
+                if (wasVoice) {
+                    _ttsEvents.tryEmit(
+                        Utterance("$missing 을(를) 찾지 못했어요. 검색창에서 다시 확인해 주세요.", natural = true),
                     )
                 }
                 return@launch
@@ -180,6 +189,8 @@ class MapRouteViewModel @Inject constructor(
                     serverHealthy = healthy,
                     resolvedStart = origin.point,
                     resolvedEnd = destination.point,
+                    // 음성 목적지 입력이 결과에 도달하면 해당 모드를 종료.
+                    awaitingDestination = false,
                 )
                 when (result) {
                     is RoutePreviewResult.Success -> {
@@ -323,6 +334,67 @@ class MapRouteViewModel @Inject constructor(
         _uiState.update { it.copy(userLocation = path.pointAt(distance), navInstruction = banner) }
     }
 
+    // ---- 음성 목적지 입력(홈 '전화 걸기'에서 진입) ----
+    /** 목적지를 말로 받도록 대기 상태로 전환하고 안내 음성을 낸다. */
+    fun startVoiceDestination() {
+        chatHistory.clear()
+        val prompt = "어디로 가고 싶으세요? 도착지를 말씀해 주세요."
+        _uiState.update {
+            it.copy(
+                awaitingDestination = true,
+                assistantActive = true,
+                assistantListening = false,
+                assistantThinking = false,
+                assistantHasKey = assistantRepository.hasApiKey,
+                assistantCaption = prompt,
+            )
+        }
+        _ttsEvents.tryEmit(Utterance(prompt, natural = true))
+    }
+
+    fun cancelVoiceDestination() = _uiState.update {
+        it.copy(awaitingDestination = false, assistantActive = false, assistantListening = false)
+    }
+
+    /** 음성으로 받은 문장에서 목적지를 뽑아 길찾기를 실행한다. */
+    private fun handleDestinationSpeech(text: String) {
+        val place = parseDestination(text)
+        selectedEnd = null
+        _uiState.update {
+            it.copy(
+                endQuery = place,
+                assistantCaption = "‘$place’(으)로 길을 찾아볼게요.",
+                assistantListening = false,
+            )
+        }
+        _ttsEvents.tryEmit(Utterance("$place 으로 길을 찾아볼게요. 잠시만요.", natural = true))
+        search()
+    }
+
+    /** "○○에 가고 싶어요"류 문장에서 장소명만 남긴다(카카오 지오코딩이 흡수하도록 러프하게). */
+    private fun parseDestination(raw: String): String {
+        var s = raw.trim()
+        // 뒤쪽 서술어/조사부터 반복 제거.
+        val tails = listOf(
+            "에 가고 싶어요", "으로 가고 싶어요", "로 가고 싶어요", "까지 가고 싶어요",
+            "에 가고 싶어", "까지 가고 싶어", "가고 싶어요", "가고 싶어", "가고싶어",
+            "까지 안내해 줘", "까지 안내해줘", "안내해 줘", "안내해줘", "안내 해줘",
+            "로 안내", "으로 안내", "까지", "으로", "로", "에 가 줘", "에 가줘",
+            "에 가자", "까지 가자", "가 줘", "가줘", "가자", "에 가", "좀", "가고",
+        )
+        var changed = true
+        while (changed) {
+            changed = false
+            for (t in tails) {
+                if (s.endsWith(t)) {
+                    s = s.removeSuffix(t).trim()
+                    changed = true
+                }
+            }
+        }
+        return s.ifBlank { raw.trim() }
+    }
+
     // ---- 말벗(음성 양방향 대화) ----
     private val chatHistory = mutableListOf<ChatTurn>()
 
@@ -355,6 +427,7 @@ class MapRouteViewModel @Inject constructor(
         val t = text.trim()
         if (t.isEmpty()) return
         if (SosWords.any { t.contains(it) }) { triggerSos(); return }
+        if (_uiState.value.awaitingDestination) { handleDestinationSpeech(t); return }
 
         if (!assistantRepository.hasApiKey) {
             respond(keywordAnswer(t))
@@ -416,18 +489,18 @@ class MapRouteViewModel @Inject constructor(
             "다치거나 위험하다고 하면 침착히 안심시키고 보호자에게 연락하겠다고 하세요."
     }
 
-    /** 챗봇에 전달할 사용자 보행 취약도 요약(0~100, 높을수록 취약). 앱이 아는 유일한 개인 특성. */
+    /** 챗봇에 전달할 사용자 보행지수 요약(0~100, 높을수록 양호). 앱이 아는 유일한 개인 특성. */
     private fun userProfileLine(): String {
         val w = tugRepository.latestWeights.value
         val untested = w == null ||
             (w.speedWeight <= 0f && w.turnWeight <= 0f && w.strengthWeight <= 0f)
         if (untested) {
-            return "아직 보행검사를 하지 않아 취약도 정보가 없는 어르신입니다. 일반적인 주의로 안내하세요."
+            return "아직 보행검사를 하지 않아 보행지수 정보가 없는 어르신입니다. 일반적인 주의로 안내하세요."
         }
-        fun pct(v: Float) = (v.coerceIn(0f, 1f) * 100).toInt()
-        return "이 어르신의 보행 취약도 — 걷는 속도 ${pct(w.speedWeight)}, " +
-            "방향전환(회전) ${pct(w.turnWeight)}, 다리 근력 ${pct(w.strengthWeight)}. " +
-            "취약도가 높은 항목은 특히 천천히·자주 안심시키며 배려해 안내하세요."
+        fun idx(v: Float) = 100 - (v.coerceIn(0f, 1f) * 100).toInt()
+        return "이 어르신의 보행지수(높을수록 양호) — 속도지수 ${idx(w.speedWeight)}, " +
+            "회전지수 ${idx(w.turnWeight)}, 근력지수 ${idx(w.strengthWeight)}. " +
+            "지수가 낮은 항목은 특히 천천히·자주 안심시키며 배려해 안내하세요."
     }
 
     private companion object {
@@ -461,6 +534,8 @@ data class MapRouteUiState(
     val assistantThinking: Boolean = false,
     val assistantHasKey: Boolean = false,
     val assistantCaption: String = "",
+    /** 홈 '전화 걸기'로 진입한 음성 목적지 입력 모드. */
+    val awaitingDestination: Boolean = false,
 ) {
     val canNavigate: Boolean = navState == NavigationState.RoutePreviewShown &&
         (preview?.segments?.isNotEmpty() == true)

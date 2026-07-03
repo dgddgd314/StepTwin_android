@@ -57,7 +57,7 @@ fun RouteScreen(
         HorizontalDivider()
 
         Text(
-            text = "현재 반영된 취약도",
+            text = "현재 반영된 보행지수",
             style = MaterialTheme.typography.titleMedium,
         )
         WeightVectorSummary(weights = route.weights)

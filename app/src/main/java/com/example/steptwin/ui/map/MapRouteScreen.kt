@@ -70,6 +70,7 @@ import com.example.steptwin.domain.preview.RoutePreview
 import com.example.steptwin.domain.preview.SegmentKind
 import com.example.steptwin.ui.assistant.rememberSpeechController
 import com.example.steptwin.ui.common.rememberAssistantVoice
+import kotlinx.coroutines.delay
 import com.kakao.vectormap.KakaoMap
 import com.kakao.vectormap.KakaoMapReadyCallback
 import com.kakao.vectormap.LatLng
@@ -211,6 +212,15 @@ fun MapRouteScreen(
         else micLauncher.launch(Manifest.permission.RECORD_AUDIO)
     }
 
+    // 홈 '전화 걸기'로 음성 목적지 입력에 진입하면, 안내 음성이 끝날 즈음 자동으로 듣기 시작
+    // (터치가 어려운 분 배려). 권한이 없으면 권한 요청을 띄운다.
+    LaunchedEffect(uiState.awaitingDestination) {
+        if (uiState.awaitingDestination) {
+            delay(2500)
+            onMic()
+        }
+    }
+
     Box(modifier = modifier.fillMaxSize()) {
         AndroidView(factory = { mapView }, modifier = Modifier.fillMaxSize())
 
@@ -248,15 +258,23 @@ fun MapRouteScreen(
             .align(Alignment.BottomCenter)
             .fillMaxWidth()
             .padding(12.dp)
-        when (uiState.navState) {
-            NavigationState.RoutePreviewShown -> RoutePreviewBar(
+        when {
+            uiState.awaitingDestination &&
+                uiState.navState != NavigationState.NavigatingPlaceholder ->
+                VoiceDestinationPanel(
+                    uiState = uiState,
+                    onMic = onMic,
+                    onCancel = viewModel::cancelVoiceDestination,
+                    modifier = bottomModifier,
+                )
+            uiState.navState == NavigationState.RoutePreviewShown -> RoutePreviewBar(
                 uiState = uiState,
                 onStartNavigation = viewModel::startNavigation,
                 onEditRoute = viewModel::openPanel,
                 onSaveFavorite = viewModel::saveFavorite,
                 modifier = bottomModifier,
             )
-            NavigationState.NavigatingPlaceholder -> Column(
+            uiState.navState == NavigationState.NavigatingPlaceholder -> Column(
                 modifier = bottomModifier,
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
@@ -273,7 +291,7 @@ fun MapRouteScreen(
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
-            NavigationState.Idle -> Unit
+            else -> Unit
         }
     }
 }
@@ -481,6 +499,48 @@ private fun RoutePreviewBar(
                 }
                 TextButton(onClick = onEditRoute) { Text(text = "경로 수정") }
             }
+        }
+    }
+}
+
+/** 음성 목적지 입력 패널 — 홈 '전화 걸기'로 진입, 도착지를 말하면 길찾기가 실행된다. */
+@Composable
+private fun VoiceDestinationPanel(
+    uiState: MapRouteUiState,
+    onMic: () -> Unit,
+    onCancel: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Card(modifier = modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(text = "🗣 어디로 갈까요?", style = MaterialTheme.typography.titleMedium)
+                TextButton(onClick = onCancel) { Text(text = "취소") }
+            }
+            Text(
+                text = uiState.assistantCaption.ifBlank { "도착지를 말씀해 주세요." },
+                style = MaterialTheme.typography.bodyLarge,
+            )
+            MicButton(
+                listening = uiState.assistantListening,
+                onMic = onMic,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text(
+                text = "예: “회기역”, “서울대병원 가고 싶어”",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }

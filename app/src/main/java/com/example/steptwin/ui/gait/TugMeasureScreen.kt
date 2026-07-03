@@ -436,7 +436,7 @@ private fun ResultView(
         HorizontalDivider()
         Text(text = "AI 보행 분석 결과", style = MaterialTheme.typography.titleMedium)
         Text(
-            text = "온디바이스 AI가 TUG 구간 지표를 분석해 보행 속도·회전·근력 취약도를 산출했습니다.",
+            text = "온디바이스 AI가 TUG 구간 지표를 분석해 속도지수·회전지수·근력지수를 산출했습니다(높을수록 양호).",
             style = MaterialTheme.typography.bodySmall,
         )
         WeightVectorSummary(weights = weights)
@@ -732,16 +732,16 @@ private class TugSpeaker(context: Context) {
     }
 }
 
-// 취약도 값을 AI 코멘트로 러프하게 변환.
+// 지수(높을수록 양호) 값을 AI 코멘트로 러프하게 변환. 입력 v 는 취약도(0~1)라 지수는 그 반대.
 private fun aiInsightLines(weights: TugWeights): List<String> {
     fun level(v: Float) = when {
-        v >= 0.66f -> "높음"
-        v >= 0.33f -> "보통"
+        v <= 0.34f -> "높음"
+        v <= 0.67f -> "보통"
         else -> "낮음"
     }
     return listOf(
-        "보행 속도 취약도 ${level(weights.speedWeight)} — 보행속도·TUG 총시간을 반영했습니다.",
-        "회전 취약도 ${level(weights.turnWeight)} — 회전 시간·각속도를 반영했습니다.",
-        "근력 취약도 ${level(weights.strengthWeight)} — 일어서기 시간·수직 가속을 반영했습니다.",
+        "속도지수 ${level(weights.speedWeight)} — 보행속도·TUG 총시간을 반영했습니다.",
+        "회전지수 ${level(weights.turnWeight)} — 회전 시간·각속도를 반영했습니다.",
+        "근력지수 ${level(weights.strengthWeight)} — 일어서기 시간·수직 가속을 반영했습니다.",
     )
 }
