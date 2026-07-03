@@ -63,6 +63,7 @@ import androidx.lifecycle.LifecycleOwner
 import com.example.steptwin.R
 import com.example.steptwin.domain.nav.NavMode
 import com.example.steptwin.domain.preview.GeoPoint
+import com.example.steptwin.domain.preview.MarkerKind
 import com.example.steptwin.domain.preview.PlaceSuggestion
 import com.example.steptwin.domain.preview.PreviewMarker
 import com.example.steptwin.domain.preview.PreviewSegment
@@ -475,6 +476,20 @@ private fun RoutePreviewBar(
                 Text(
                     text = "경로 준비 완료 · ${preview.segments.size}개 구간, ${preview.markers.size}개 지점",
                     style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+            // 내 보행지수 맞춤 근거(효과성): 계단 회피/그늘막 수를 노출.
+            val stairs = preview.markers.count { it.kind == MarkerKind.STAIRS_AVOIDED }
+            val shades = preview.markers.count { it.kind == MarkerKind.SHADE_SHELTER }
+            if (stairs > 0 || shades > 0) {
+                val parts = buildList {
+                    if (stairs > 0) add("계단 ${stairs}곳 회피")
+                    if (shades > 0) add("그늘막 ${shades}곳")
+                }
+                Text(
+                    text = "🧭 내 보행지수 맞춤 · ${parts.joinToString(" · ")}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary,
                 )
             }
             preview.segments.mapNotNull { it.transit }.forEach { transit ->

@@ -8,6 +8,7 @@ import com.example.steptwin.domain.favorites.FavoriteRoute
 import com.example.steptwin.domain.nav.NavMode
 import com.example.steptwin.domain.nav.NavPath
 import com.example.steptwin.domain.preview.GeoPoint
+import com.example.steptwin.domain.preview.MarkerKind
 import com.example.steptwin.domain.preview.NamedPlace
 import com.example.steptwin.domain.preview.PlaceSuggestion
 import com.example.steptwin.domain.preview.RoutePreview
@@ -57,6 +58,11 @@ class MapRouteViewModel @Inject constructor(
     // ---- 내비게이션 세션 ----
     private var navPath: NavPath? = null
     private val announcedCues = mutableSetOf<String>()
+
+    // 말벗 선제 케어: 경로 위험지점(계단 회피/그늘막)을 취약지수 근거로 미리 안내.
+    private data class CareCue(val id: String, val distance: Double, val speak: String)
+    private var careCues: List<CareCue> = emptyList()
+    private val announcedCare = mutableSetOf<String>()
     private val _ttsEvents = MutableSharedFlow<Utterance>(extraBufferCapacity = 16)
     val ttsEvents: SharedFlow<Utterance> = _ttsEvents.asSharedFlow()
 
@@ -274,6 +280,8 @@ class MapRouteViewModel @Inject constructor(
         val path = NavPath.from(preview)
         navPath = path
         announcedCues.clear()
+        announcedCare.clear()
+        careCues = if (path != null) buildCareCues(path, preview.markers) else emptyList()
         _uiState.update {
             it.copy(
                 navState = NavigationState.NavigatingPlaceholder,
@@ -289,6 +297,8 @@ class MapRouteViewModel @Inject constructor(
     fun stopNavigation() {
         navPath = null
         announcedCues.clear()
+        careCues = emptyList()
+        announcedCare.clear()
         _uiState.update {
             if (it.navState == NavigationState.NavigatingPlaceholder) {
                 it.copy(
@@ -333,8 +343,50 @@ class MapRouteViewModel @Inject constructor(
             // 내비 안내는 즉시성·오프라인·비용 때문에 기기 TTS.
             _ttsEvents.tryEmit(Utterance(cue.speak, natural = false))
         }
+        // 말벗이 켜져 있으면 위험지점 선제 케어를 자연 음성으로 먼저 안내(에이전트 행동).
+        if (_uiState.value.assistantActive) {
+            val care = careCues
+                .filter { it.distance <= distance && it.id !in announcedCare }
+                .sortedBy { it.distance }
+            for (c in care) {
+                announcedCare += c.id
+                _ttsEvents.tryEmit(Utterance(c.speak, natural = true))
+                _uiState.update { it.copy(assistantCaption = c.speak) }
+            }
+        }
         val banner = fired.lastOrNull()?.banner ?: _uiState.value.navInstruction
         _uiState.update { it.copy(userLocation = path.pointAt(distance), navInstruction = banner) }
+    }
+
+    /** 경로 마커(계단 회피/그늘막)를 진행거리로 투영하고 취약지수 근거로 케어 문구를 만든다. */
+    private fun buildCareCues(path: NavPath, markers: List<com.example.steptwin.domain.preview.PreviewMarker>): List<CareCue> {
+        val w = tugRepository.latestWeights.value
+        val strengthLow = (w?.strengthWeight ?: 0f) >= 0.5f
+        val speedLow = (w?.speedWeight ?: 0f) >= 0.5f
+        val out = ArrayList<CareCue>()
+        markers.forEachIndexed { i, m ->
+            val lead = (path.project(m.coordinate) - 25.0).coerceAtLeast(0.0)
+            when (m.kind) {
+                MarkerKind.STAIRS_AVOIDED -> out += CareCue(
+                    "care_stairs_$i", lead,
+                    if (strengthLow) {
+                        "잠시 후 계단을 피해 평지로 돌아가요. 근력에 무리 없게 제가 미리 챙길게요."
+                    } else {
+                        "잠시 후 계단을 피해 돌아가는 구간이에요. 천천히 오세요."
+                    },
+                )
+                MarkerKind.SHADE_SHELTER -> out += CareCue(
+                    "care_shade_$i", lead,
+                    if (speedLow) {
+                        "곧 그늘막이 있어요. 힘드시면 잠깐 쉬었다 가도 좋아요."
+                    } else {
+                        "곧 그늘막이 있어요. 필요하면 쉬어 가세요."
+                    },
+                )
+                else -> Unit
+            }
+        }
+        return out.sortedBy { it.distance }
     }
 
     // ---- 음성 목적지 입력(홈 '전화 걸기'에서 진입) ----
@@ -493,7 +545,10 @@ class MapRouteViewModel @Inject constructor(
         }
         chatHistory.clear()
         val dest = lastDestination?.name ?: "목적지"
-        val greeting = "안녕하세요. ${dest}까지 제가 말벗이 되어 안내해 드릴게요. 궁금하면 언제든 물어보세요."
+        val briefing = routeBriefing()
+        val greeting = "안녕하세요. ${dest}까지 제가 말벗이 되어 안내해 드릴게요. " +
+            (if (briefing.isNotBlank()) "$briefing " else "") +
+            "궁금하면 언제든 물어보세요."
         _uiState.update {
             it.copy(
                 assistantActive = true,
@@ -570,9 +625,25 @@ class MapRouteViewModel @Inject constructor(
             "[경로] 출발 '$origin' → 도착 '$dest'. 현재 안내: '${currentInstr()}'. " +
             "목적지까지 약 ${remainingMeters()}미터 남음. " +
             (if (transit.isNotBlank()) "이용 대중교통: $transit. " else "") +
+            (routeBriefing().let { if (it.isNotBlank()) "[맞춤경로] $it " else "" }) +
             "[사용자] ${userProfileLine()} " +
             "지도에 없는 실제 지형(가게 이름, 신호등 개수 등)은 지어내지 말고, 모르면 다정하게 모른다고 하세요. " +
             "다치거나 위험하다고 하면 침착히 안심시키고 보호자에게 연락하겠다고 하세요."
+    }
+
+    /** 이 경로가 사용자를 위해 어떻게 맞춰졌는지 요약(계단 회피/그늘막). 없으면 빈 문자열. */
+    private fun routeBriefing(): String {
+        val markers = _uiState.value.preview?.markers ?: return ""
+        val stairs = markers.count { it.kind == MarkerKind.STAIRS_AVOIDED }
+        val shades = markers.count { it.kind == MarkerKind.SHADE_SHELTER }
+        val parts = buildList {
+            if (stairs > 0) add("계단 ${stairs}곳을 피한 길이에요")
+            if (shades > 0) add("쉬어 갈 그늘막 ${shades}곳이 있어요")
+        }
+        if (parts.isEmpty()) return ""
+        val w = tugRepository.latestWeights.value
+        val note = if (stairs > 0 && (w?.strengthWeight ?: 0f) >= 0.5f) " 근력지수를 고려했어요." else ""
+        return parts.joinToString(", ") + "." + note
     }
 
     /** 챗봇에 전달할 사용자 보행지수 요약(0~100, 높을수록 양호). 앱이 아는 유일한 개인 특성. */
