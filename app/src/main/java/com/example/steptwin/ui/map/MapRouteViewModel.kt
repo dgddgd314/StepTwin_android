@@ -51,6 +51,9 @@ class MapRouteViewModel @Inject constructor(
     private var startSuggestJob: Job? = null
     private var endSuggestJob: Job? = null
 
+    // 기기 GPS 현재 위치(서버 전송 안 함). 음성 목적지 입력 시 출발지로 사용.
+    private var currentGps: GeoPoint? = null
+
     // ---- 내비게이션 세션 ----
     private var navPath: NavPath? = null
     private val announcedCues = mutableSetOf<String>()
@@ -335,10 +338,15 @@ class MapRouteViewModel @Inject constructor(
     }
 
     // ---- 음성 목적지 입력(홈 '전화 걸기'에서 진입) ----
+    /** 화면에서 받은 기기 GPS 위치를 저장(출발지로 사용, 서버 전송 없음). */
+    fun updateCurrentLocation(latitude: Double, longitude: Double) {
+        currentGps = GeoPoint(latitude, longitude)
+    }
+
     /** 목적지를 말로 받도록 대기 상태로 전환하고 안내 음성을 낸다. */
     fun startVoiceDestination() {
         chatHistory.clear()
-        val prompt = "어디로 가고 싶으세요? 도착지를 말씀해 주세요."
+        val prompt = "어디로 갈까요? 도착지 이름만 말씀해 주세요."
         _uiState.update {
             it.copy(
                 awaitingDestination = true,
@@ -356,9 +364,15 @@ class MapRouteViewModel @Inject constructor(
         it.copy(awaitingDestination = false, assistantActive = false, assistantListening = false)
     }
 
-    /** 음성으로 받은 문장에서 목적지를 뽑아 길찾기를 실행한다. */
+    /** 음성으로 받은 문장에서 목적지를 뽑아, 출발지=GPS 현위치로 길찾기를 실행한다. */
     private fun handleDestinationSpeech(text: String) {
         val place = parseDestination(text)
+        // 출발지: GPS 현재 위치가 있으면 그것을, 없으면 기존 출발지 검색어로 폴백.
+        val gps = currentGps
+        if (gps != null) {
+            selectedStart = NamedPlace("현재 위치", gps)
+            _uiState.update { it.copy(startQuery = "현재 위치", resolvedStart = gps) }
+        }
         selectedEnd = null
         _uiState.update {
             it.copy(
@@ -367,27 +381,41 @@ class MapRouteViewModel @Inject constructor(
                 assistantListening = false,
             )
         }
-        _ttsEvents.tryEmit(Utterance("$place 으로 길을 찾아볼게요. 잠시만요.", natural = true))
+        _ttsEvents.tryEmit(Utterance("$place. 지금 위치에서 길을 찾아볼게요. 잠시만요.", natural = true))
         search()
     }
 
-    /** "○○에 가고 싶어요"류 문장에서 장소명만 남긴다(카카오 지오코딩이 흡수하도록 러프하게). */
+    /**
+     * "○○ 가고 싶어요"류 발화에서 장소명만 남긴다. 뒤에 붙는 이동 의도 표현/조사만 제거하고,
+     * 종로·을지로처럼 '로'로 끝나는 지명을 훼손하지 않도록 단독 조사는 함부로 자르지 않는다.
+     */
     private fun parseDestination(raw: String): String {
         var s = raw.trim()
-        // 뒤쪽 서술어/조사부터 반복 제거.
-        val tails = listOf(
-            "에 가고 싶어요", "으로 가고 싶어요", "로 가고 싶어요", "까지 가고 싶어요",
-            "에 가고 싶어", "까지 가고 싶어", "가고 싶어요", "가고 싶어", "가고싶어",
-            "까지 안내해 줘", "까지 안내해줘", "안내해 줘", "안내해줘", "안내 해줘",
-            "로 안내", "으로 안내", "까지", "으로", "로", "에 가 줘", "에 가줘",
-            "에 가자", "까지 가자", "가 줘", "가줘", "가자", "에 가", "좀", "가고",
+        // 뒤쪽 이동 의도 표현(선행 조사 포함)만 제거.
+        val tailPatterns = listOf(
+            Regex("""(으로|로|에|까지|를|을)?\s*가고\s*싶어요?$"""),
+            Regex("""(으로|로|에|까지|를|을)?\s*가고\s*싶다$"""),
+            Regex("""(으로|로|에|까지|를|을)?\s*가고\s*파요?$"""),
+            Regex("""(으로|로|에|까지|를|을)?\s*갈래요?$"""),
+            Regex("""(으로|로|에|까지|를|을)?\s*가\s*주세요$"""),
+            Regex("""(으로|로|에|까지|를|을)?\s*가\s*줘요?$"""),
+            Regex("""(으로|로|에|까지|를|을)?\s*가자$"""),
+            Regex("""(으로|로|에|까지|를|을)?\s*가야\s*(돼요?|해요?|되)$"""),
+            Regex("""(으로|로|에|까지|를|을)?\s*데려다\s*줘요?$"""),
+            Regex("""(으로|로|에|까지)?\s*안내\s*(해)?\s*(줘요?|주세요)$"""),
+            Regex("""(으로|로|에|까지)?\s*안내$"""),
+            Regex("""(으로|로|에|까지|를|을)?\s*찾아\s*줘요?$"""),
+            Regex("""(으로|로|에|까지)?\s*가는\s*(길|방법)$"""),
+            Regex("""\s*좀$"""),
         )
         var changed = true
-        while (changed) {
+        var guard = 0
+        while (changed && guard++ < 8) {
             changed = false
-            for (t in tails) {
-                if (s.endsWith(t)) {
-                    s = s.removeSuffix(t).trim()
+            for (p in tailPatterns) {
+                val next = p.replace(s, "").trim()
+                if (next != s) {
+                    s = next
                     changed = true
                 }
             }

@@ -190,6 +190,12 @@ fun MapRouteScreen(
         onLocation = viewModel::onRealLocation,
     )
 
+    // 음성 목적지 입력 중: 출발지로 쓸 현재 위치를 확보(서버 전송 없음).
+    CurrentLocationBridge(
+        active = uiState.awaitingDestination,
+        onLocation = viewModel::updateCurrentLocation,
+    )
+
     // 말벗(음성 대화): STT + 마이크 권한.
     val speechController = rememberSpeechController(
         onResult = viewModel::onUserUtterance,
@@ -528,7 +534,12 @@ private fun VoiceDestinationPanel(
                 TextButton(onClick = onCancel) { Text(text = "취소") }
             }
             Text(
-                text = uiState.assistantCaption.ifBlank { "도착지를 말씀해 주세요." },
+                text = "출발: 현재 위치(GPS)",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = uiState.assistantCaption.ifBlank { "도착지 이름만 말씀해 주세요." },
                 style = MaterialTheme.typography.bodyLarge,
             )
             MicButton(
@@ -537,7 +548,7 @@ private fun VoiceDestinationPanel(
                 modifier = Modifier.fillMaxWidth(),
             )
             Text(
-                text = "예: “회기역”, “서울대병원 가고 싶어”",
+                text = "도착지 이름만 또렷이 말씀해 주세요. 예: “회기역”, “경희의료원”",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -749,6 +760,62 @@ private fun RealGpsBridge(
     DisposableEffect(active, granted.value) {
         if (!active || !granted.value) return@DisposableEffect onDispose {}
         val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+        val listener = object : LocationListener {
+            override fun onLocationChanged(location: Location) {
+                onLocation(location.latitude, location.longitude)
+            }
+
+            @Deprecated("deprecated in API 29")
+            override fun onStatusChanged(provider: String?, status: Int, extras: android.os.Bundle?) = Unit
+            override fun onProviderEnabled(provider: String) = Unit
+            override fun onProviderDisabled(provider: String) = Unit
+        }
+        try {
+            lm?.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 1f, listener)
+            if (lm?.isProviderEnabled(LocationManager.NETWORK_PROVIDER) == true) {
+                lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 2000L, 5f, listener)
+            }
+        } catch (_: SecurityException) {
+        }
+        onDispose { lm?.removeUpdates(listener) }
+    }
+}
+
+/**
+ * 현재 위치 확보 브리지(음성 목적지 입력 시 출발지용). 마지막 위치를 즉시 쓰고, 갱신도 구독.
+ * 좌표는 서버로 전송하지 않는다.
+ */
+@Composable
+private fun CurrentLocationBridge(
+    active: Boolean,
+    onLocation: (Double, Double) -> Unit,
+) {
+    val context = LocalContext.current
+    val granted = remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
+                PackageManager.PERMISSION_GRANTED,
+        )
+    }
+    val launcher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { ok -> granted.value = ok }
+
+    LaunchedEffect(active) {
+        if (active && !granted.value) launcher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+    }
+
+    DisposableEffect(active, granted.value) {
+        if (!active || !granted.value) return@DisposableEffect onDispose {}
+        val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+        // 즉시: 마지막으로 알려진 위치(있으면 바로 출발지로 사용).
+        try {
+            val last = lm?.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+                ?: lm?.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+            if (last != null) onLocation(last.latitude, last.longitude)
+        } catch (_: SecurityException) {
+        }
+        // 갱신: 더 최신/정확한 위치.
         val listener = object : LocationListener {
             override fun onLocationChanged(location: Location) {
                 onLocation(location.latitude, location.longitude)
