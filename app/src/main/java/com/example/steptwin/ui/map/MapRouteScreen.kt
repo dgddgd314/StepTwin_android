@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -61,6 +62,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -742,50 +744,49 @@ private fun NavigatingBar(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Text(text = "길안내 모드", style = MaterialTheme.typography.titleMedium)
-            // 현재 안내(음성과 동일 문구) — 크게
+            // 현재 안내(음성과 동일 문구) — 겹침 방지 위해 컴팩트하게.
             Text(
                 text = uiState.navInstruction.ifBlank { "경로를 따라 이동하세요." },
-                style = MaterialTheme.typography.titleMedium,
+                style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.primary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
             )
 
-            // 실제 GPS / 모의(슬라이더) 전환
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // 모드 전환 + 종료를 한 줄로.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 FilterChip(
                     selected = uiState.navMode == NavMode.Simulated,
                     onClick = { onToggleMode(NavMode.Simulated) },
-                    label = { Text(text = "모의(슬라이더)") },
+                    label = { Text(text = "모의", style = MaterialTheme.typography.bodySmall) },
                 )
                 FilterChip(
                     selected = uiState.navMode == NavMode.RealGps,
                     onClick = { onToggleMode(NavMode.RealGps) },
-                    label = { Text(text = "실제 GPS") },
+                    label = { Text(text = "실제 GPS", style = MaterialTheme.typography.bodySmall) },
                 )
+                Spacer(Modifier.weight(1f))
+                TextButton(
+                    onClick = onStop,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                ) {
+                    Text(text = "종료", style = MaterialTheme.typography.bodyMedium)
+                }
             }
 
             if (uiState.navMode == NavMode.Simulated) {
-                Text(
-                    text = "슬라이더로 경로를 따라 이동해 보세요.",
-                    style = MaterialTheme.typography.bodySmall,
-                )
                 Slider(
                     value = uiState.navProgress,
                     onValueChange = onProgress,
                     modifier = Modifier.fillMaxWidth(),
                 )
-            } else {
-                Text(
-                    text = "실제 GPS 위치를 따라갑니다. 위치는 기기에서만 사용하며 서버로 전송하지 않습니다.",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-
-            Button(onClick = onStop, modifier = Modifier.fillMaxWidth()) {
-                Text(text = "길안내 종료")
             }
         }
     }
