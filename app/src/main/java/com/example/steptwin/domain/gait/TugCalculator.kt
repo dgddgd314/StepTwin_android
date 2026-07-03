@@ -114,10 +114,10 @@ class TugCalculator @Inject constructor() {
 
         val bins = (((endNs - startNs) / DtNs) + 1).toInt().coerceIn(1, 4000)
         val accelMag = binMeans(accel, startNs, bins) { magnitude(it.x, it.y, it.z) }
-        // 회전: 중력축(yaw) 투영. 폴백은 자이로 크기.
-        val yawArr = binMeans(gyro, startNs, bins) { s ->
+        // 회전: 중력축(yaw) '부호 있는' 투영(누적 회전각으로 실제 회전만 인정). 폴백은 자이로 크기.
+        val yawSignedArr = binMeans(gyro, startNs, bins) { s ->
             val cx = s.x - ox; val cy = s.y - oy; val cz = s.z - oz
-            if (useGravity) abs(cx * gx + cy * gy + cz * gz).toDouble()
+            if (useGravity) (cx * gx + cy * gy + cz * gz).toDouble()
             else magnitude(cx, cy, cz)
         }
         // 수직 가속(기립/착석 세기): 선형가속도의 ĝ 투영. 폴백은 가속 크기.
@@ -127,37 +127,89 @@ class TugCalculator @Inject constructor() {
         }
         val dtSec = DtNs / 1_000_000_000f
 
+        // 1) 평활화 + onset(첫 움직임) 검출.
         var baselineMag = accelMag.firstOrNull() ?: 0f
         var moveEma = 0f
         var yawEma = 0f
-        val phases = Array(bins) { TugPhase.Still }
+        val moveArr = FloatArray(bins)
+        val yawArr = FloatArray(bins) // 부호 있는 yaw(EMA)
         var onsetBin = -1
-        var firstWalkBin = -1
-        var lastWalkBin = -1
-        var turnPeak = 0f
-
         for (b in 0 until bins) {
             baselineMag = baselineMag * (1f - BaselineAlpha) + accelMag[b] * BaselineAlpha
             val movement = abs(accelMag[b] - baselineMag)
             moveEma = moveEma * (1f - SmoothAlpha) + movement * SmoothAlpha
-            yawEma = yawEma * (1f - SmoothAlpha) + yawArr[b] * SmoothAlpha
-
+            yawEma = yawEma * (1f - SmoothAlpha) + yawSignedArr[b] * SmoothAlpha
+            moveArr[b] = moveEma
+            yawArr[b] = yawEma
             if (onsetBin < 0 && movement > OnsetThreshold) onsetBin = b
-            if (yawArr[b] > turnPeak) turnPeak = yawArr[b]
+        }
+        val onset = if (onsetBin >= 0) onsetBin else 0
 
-            val phase = when {
-                yawEma > TurnYawThreshold -> TugPhase.Turn
-                moveEma > WalkAccelThreshold -> TugPhase.Walk
+        // 2) 기립(sit-to-stand) 창: onset 이후 '상승→진정'까지. 이 창에서는 보행/회전으로 잡지 않는다
+        //    (그냥 일어나는 동작이 보행/회전으로 오판되던 문제 방지).
+        val standCap = (onset + StandMaxBins).coerceAtMost(bins - 1)
+        var settleStand = -1
+        var rose = false
+        for (b in onset..standCap) {
+            if (moveArr[b] > StandRiseThreshold) {
+                rose = true
+            } else if (rose && moveArr[b] < StandSettleThreshold) {
+                settleStand = b; break
+            }
+        }
+        val standEnd = (if (settleStand >= 0) settleStand else onset + DefaultStandBins)
+            .coerceIn((onset + StandMinBins).coerceAtMost(bins - 1), bins - 1)
+
+        // 3) 회전 검출: 기립 창 이후에서 '같은 방향으로 충분히 누적 회전한' 구간만 회전으로 인정.
+        //    한 방향 누적각 기준 → 보행 중 좌우 흔들림/순간 스파이크는 걸러짐(과민 완화).
+        val turnMask = BooleanArray(bins)
+        run {
+            var b = standEnd
+            while (b < bins) {
+                val v = yawArr[b]
+                if (abs(v) < TurnEnterYaw) { b++; continue }
+                val positive = v >= 0f
+                var e = b
+                var acc = 0f
+                while (e < bins) {
+                    val vv = yawArr[e]
+                    val sameDir = (vv >= 0f) == positive
+                    if (!sameDir || abs(vv) < TurnExitYaw) break
+                    acc += abs(vv) * dtSec
+                    e++
+                }
+                if (e - b >= TurnMinBins && acc >= MinTurnAngleRad) {
+                    for (k in b until e) turnMask[k] = true
+                }
+                b = if (e > b) e else b + 1
+            }
+        }
+
+        // 4) 구간 배열: 기립 창은 Still, 이후는 회전/보행/정지.
+        val phases = Array(bins) { TugPhase.Still }
+        for (b in standEnd until bins) {
+            phases[b] = when {
+                turnMask[b] -> TugPhase.Turn
+                moveArr[b] > WalkAccelThreshold -> TugPhase.Walk
                 else -> TugPhase.Still
             }
-            phases[b] = phase
-            if (phase == TugPhase.Walk) {
+        }
+
+        var firstWalkBin = -1
+        var lastWalkBin = -1
+        for (b in 0 until bins) {
+            if (phases[b] == TugPhase.Walk) {
                 if (firstWalkBin < 0) firstWalkBin = b
                 lastWalkBin = b
             }
         }
 
-        val onset = if (onsetBin >= 0) onsetBin else 0
+        // 회전 peak 각속도: 회전 구간에서만.
+        var turnPeak = 0f
+        for (b in 0 until bins) {
+            if (turnMask[b] && abs(yawSignedArr[b]) > turnPeak) turnPeak = abs(yawSignedArr[b])
+        }
+
         var settleBin = onset
         for (b in bins - 1 downTo 0) {
             if (phases[b] != TugPhase.Still) { settleBin = b; break }
@@ -188,13 +240,12 @@ class TugCalculator @Inject constructor() {
         val turnToSit = if (turnRuns.size >= 2) turnRuns.last() else null
         val turnToSitSec = (turnToSit?.let { it.last - it.first + 1 } ?: 0) * dtSec
 
-        // 기립(sit-to-stand): onset → 첫 보행
-        val standEnd = if (firstWalkBin > onset) firstWalkBin else (onset + 1).coerceAtMost(settleBin)
+        // 기립(sit-to-stand): onset → standEnd
         val standSec = ((standEnd - onset) * dtSec).coerceIn(0.3f, 4.0f)
         val standPeak = maxInRange(vertArr, onset, standEnd)
 
         // 착석(stand-to-sit): 마지막 보행/의자앞회전 이후 → 착석 완료
-        val sitStart = maxOf(lastWalkBin, turnToSit?.last ?: -1, onset)
+        val sitStart = maxOf(lastWalkBin, turnToSit?.last ?: -1, standEnd)
         val sitSec = if (settleBin > sitStart) ((settleBin - sitStart) * dtSec).coerceIn(0.3f, 4.0f) else 0.6f
         val standPeakOrSit = maxOf(standPeak, maxInRange(vertArr, sitStart, settleBin))
 
@@ -283,9 +334,22 @@ class TugCalculator @Inject constructor() {
         const val DtNs = 50_000_000L
         const val BaselineAlpha = 0.05f
         const val SmoothAlpha = 0.5f
-        const val TurnYawThreshold = 1.0f
         const val WalkAccelThreshold = 1.2f
         const val OnsetThreshold = 0.6f
+
+        // 회전: 진입/유지 각속도(rad/s) + 최소 지속 + 한 방향 누적 회전각(rad) 기준.
+        // 실제 180° 회전은 ~3.14rad 누적 → 보행 좌우흔들림/순간 스파이크는 문턱 미달로 걸러짐.
+        const val TurnEnterYaw = 1.0f
+        const val TurnExitYaw = 0.6f
+        const val TurnMinBins = 6 // 0.3s 이상 지속
+        const val MinTurnAngleRad = 1.2f // 약 69° 이상 누적해야 회전으로 인정
+
+        // 기립(sit-to-stand) 창: 이 구간에선 보행/회전 판정 금지.
+        const val StandRiseThreshold = 0.9f // 이 이상 움직이면 '상승 중'
+        const val StandSettleThreshold = 0.5f // 상승 후 이 아래로 내려가면 기립 완료
+        const val StandMaxBins = 60 // 최대 3.0s 탐색
+        const val StandMinBins = 4 // 최소 0.2s
+        const val DefaultStandBins = 16 // 진정 신호 없을 때 기본 0.8s
 
         const val ClinicalFollowUpSec = 13.5f
         const val TurnDelaySec = 2.45f
