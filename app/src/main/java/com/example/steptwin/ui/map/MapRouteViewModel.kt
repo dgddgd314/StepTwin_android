@@ -15,6 +15,7 @@ import com.example.steptwin.domain.preview.RoutePreviewResult
 import com.example.steptwin.domain.repository.RoutePreviewRepository
 import com.example.steptwin.domain.repository.TugRepository
 import com.example.steptwin.domain.repository.VoiceAssistantRepository
+import com.example.steptwin.ui.common.Utterance
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -53,8 +54,8 @@ class MapRouteViewModel @Inject constructor(
     // ---- 내비게이션 세션 ----
     private var navPath: NavPath? = null
     private val announcedCues = mutableSetOf<String>()
-    private val _ttsEvents = MutableSharedFlow<String>(extraBufferCapacity = 16)
-    val ttsEvents: SharedFlow<String> = _ttsEvents.asSharedFlow()
+    private val _ttsEvents = MutableSharedFlow<Utterance>(extraBufferCapacity = 16)
+    val ttsEvents: SharedFlow<Utterance> = _ttsEvents.asSharedFlow()
 
     init {
         // "내 보행정보"에서 고른 즐겨찾기를 이어받아 자동으로 길찾기 실행.
@@ -315,7 +316,8 @@ class MapRouteViewModel @Inject constructor(
             .sortedBy { it.triggerDistance }
         for (cue in fired) {
             announcedCues += cue.id
-            _ttsEvents.tryEmit(cue.speak)
+            // 내비 안내는 즉시성·오프라인·비용 때문에 기기 TTS.
+            _ttsEvents.tryEmit(Utterance(cue.speak, natural = false))
         }
         val banner = fired.lastOrNull()?.banner ?: _uiState.value.navInstruction
         _uiState.update { it.copy(userLocation = path.pointAt(distance), navInstruction = banner) }
@@ -342,7 +344,7 @@ class MapRouteViewModel @Inject constructor(
                 assistantCaption = greeting,
             )
         }
-        _ttsEvents.tryEmit(greeting)
+        _ttsEvents.tryEmit(Utterance(greeting, natural = true))
     }
 
     fun setAssistantListening(listening: Boolean) =
@@ -366,7 +368,7 @@ class MapRouteViewModel @Inject constructor(
             }.getOrElse { keywordAnswer(t) }
             chatHistory.add(ChatTurn("assistant", reply))
             _uiState.update { it.copy(assistantThinking = false, assistantCaption = reply) }
-            _ttsEvents.tryEmit(reply)
+            _ttsEvents.tryEmit(Utterance(reply, natural = true))
         }
     }
 
@@ -384,13 +386,14 @@ class MapRouteViewModel @Inject constructor(
 
     private fun respond(text: String) {
         _uiState.update { it.copy(assistantThinking = false, assistantCaption = text) }
-        _ttsEvents.tryEmit(text)
+        _ttsEvents.tryEmit(Utterance(text, natural = true))
     }
 
     private fun triggerSos() {
         val msg = "긴급 도움 요청을 보냈어요. 보호자에게 곧 연락이 갈 거예요. 그 자리에 잠시 계세요."
         _uiState.update { it.copy(assistantThinking = false, assistantCaption = "🚨 $msg") }
-        _ttsEvents.tryEmit(msg)
+        // 긴급 안내는 지연 없이 확실히 나가도록 기기 TTS.
+        _ttsEvents.tryEmit(Utterance(msg, natural = false))
     }
 
     private fun keywordAnswer(text: String): String = when {

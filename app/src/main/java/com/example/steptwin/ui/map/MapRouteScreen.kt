@@ -60,7 +60,7 @@ import com.example.steptwin.domain.preview.PreviewSegment
 import com.example.steptwin.domain.preview.RoutePreview
 import com.example.steptwin.domain.preview.SegmentKind
 import com.example.steptwin.ui.assistant.rememberSpeechController
-import com.example.steptwin.ui.common.rememberKoreanTts
+import com.example.steptwin.ui.common.rememberAssistantVoice
 import com.kakao.vectormap.KakaoMap
 import com.kakao.vectormap.KakaoMapReadyCallback
 import com.kakao.vectormap.LatLng
@@ -150,10 +150,10 @@ fun MapRouteScreen(
         drawPreview(map, uiState.preview, uiState.resolvedStart, uiState.resolvedEnd, context)
     }
 
-    // 내비게이션 안내 TTS: ViewModel 이벤트를 큐로 발화.
-    val tts = rememberKoreanTts()
+    // 음성 발화: 내비 안내는 기기 TTS, 말벗 답변은 ElevenLabs 자연 음성(폴백=기기 TTS).
+    val voice = rememberAssistantVoice()
     LaunchedEffect(Unit) {
-        viewModel.ttsEvents.collect { tts.speak(it, flush = false) }
+        viewModel.ttsEvents.collect { voice.speak(it.text, natural = it.natural) }
     }
 
     // 내 위치 마커 + 카메라 추적(내비 중 userLocation 갱신마다).
