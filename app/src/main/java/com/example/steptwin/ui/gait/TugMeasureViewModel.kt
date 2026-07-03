@@ -54,6 +54,12 @@ class TugMeasureViewModel @Inject constructor(
     private var turnDone = false
     private var stillTicks = 0
 
+    // 기립 억제: 일어서는 동안(상승→'잠시 정지' 전)에는 이동/회전으로 판단하지 않는다.
+    private var standUpActive = false
+    private var standRose = false
+    private var standStillTicks = 0
+    private var standUpTicks = 0
+
     private val _uiState = MutableStateFlow(TugMeasureUiState())
     val uiState: StateFlow<TugMeasureUiState> = _uiState.asStateFlow()
 
@@ -263,11 +269,27 @@ class TugMeasureViewModel @Inject constructor(
         dynAccelEma = dynAccelEma * (1f - SmoothAlpha) + movement * SmoothAlpha
         gyroEma = gyroEma * (1f - SmoothAlpha) + gyroMag * SmoothAlpha
 
-        val phase = when {
+        val rawPhase = when {
             gyroEma > TurnGyroThreshold -> TugPhase.Turn
             dynAccelEma > WalkAccelThreshold -> TugPhase.Walk
             else -> TugPhase.Still
         }
+
+        // 기립 억제: 일어서는 중에는 이동/회전으로 잡힌 값도 무시하고 '정지'로 본다.
+        // 일어선 뒤 '잠시 정지'(안내 지시)가 감지되면 기립 종료 → 이후부터 보행/회전 인정.
+        if (standUpActive) {
+            standUpTicks++
+            if (dynAccelEma > StandRiseThreshold) standRose = true
+            standStillTicks = if (standRose && dynAccelEma < StandSettleThreshold) {
+                standStillTicks + 1
+            } else {
+                0
+            }
+            if ((standRose && standStillTicks >= StandSettleTicks) || standUpTicks >= StandUpMaxTicks) {
+                standUpActive = false
+            }
+        }
+        val phase = if (standUpActive) TugPhase.Still else rawPhase
 
         moveSeries.addLast(movement)
         gyroSeries.addLast(gyroMag)
@@ -298,6 +320,7 @@ class TugMeasureViewModel @Inject constructor(
 
     private fun resetSteps() {
         standDone = false; walkDone = false; turnDone = false; stillTicks = 0
+        standUpActive = true; standRose = false; standStillTicks = 0; standUpTicks = 0
     }
 
     fun reset() {
@@ -356,6 +379,12 @@ class TugMeasureViewModel @Inject constructor(
         private const val TurnGyroThreshold = 1.0f
         private const val WalkAccelThreshold = 1.2f
         private const val OnsetThreshold = 0.6f
+
+        // 기립 억제 파라미터(틱 = WaveTickMillis 60ms).
+        private const val StandRiseThreshold = 0.9f // 이 이상 움직이면 '일어서는 중'
+        private const val StandSettleThreshold = 0.4f // 상승 후 이 아래로 내려가면 '정지'
+        private const val StandSettleTicks = 6 // 약 0.36초 정지 유지 = 기립 완료
+        private const val StandUpMaxTicks = 50 // 안전 상한 약 3초(정지 안 하면 강제 해제)
     }
 }
 

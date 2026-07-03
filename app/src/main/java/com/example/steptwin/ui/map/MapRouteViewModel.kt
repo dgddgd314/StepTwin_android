@@ -340,8 +340,8 @@ class MapRouteViewModel @Inject constructor(
             .sortedBy { it.triggerDistance }
         for (cue in fired) {
             announcedCues += cue.id
-            // 내비 안내는 즉시성·오프라인·비용 때문에 기기 TTS.
-            _ttsEvents.tryEmit(Utterance(cue.speak, natural = false))
+            // 길안내 음성도 ElevenLabs 목소리로 통일(실패 시 기기 TTS 자동 폴백).
+            _ttsEvents.tryEmit(Utterance(cue.speak, natural = true))
         }
         // 말벗이 켜져 있으면 위험지점 선제 케어를 자연 음성으로 먼저 안내(에이전트 행동).
         if (_uiState.value.assistantActive) {
